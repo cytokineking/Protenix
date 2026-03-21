@@ -162,12 +162,14 @@ class BaseSingleDataset(Dataset):
         """
         indices_list = read_indices_csv(indices_fpath)
         num_data = len(indices_list)
+        self.check_indices_list(indices_list, "initial loading")
         logger.info(f"#Rows in indices list: {num_data}")
         # Filter by pdb_list
         if self.pdb_list is not None:
             pdb_filter_list = set(self.read_pdb_list(pdb_list=self.pdb_list))
             indices_list = indices_list[indices_list["pdb_id"].isin(pdb_filter_list)]
             logger.info(f"[filtered by pdb_list] #Rows: {len(indices_list)}")
+            self.check_indices_list(indices_list, "pdb_list filtering")
 
         # Filter by max_n_token
         if self.max_n_token > 0:
@@ -179,6 +181,9 @@ class BaseSingleDataset(Dataset):
             logger.info(
                 f"[filtered by n_token ({self.max_n_token})] #Rows: {len(indices_list)}"
             )
+            self.check_indices_list(
+                indices_list, f"max_n_token ({self.max_n_token}) filtering"
+            )
 
         if self.min_n_token > 0:
             valid_mask = indices_list["num_tokens"].astype(int) >= self.min_n_token
@@ -188,6 +193,9 @@ class BaseSingleDataset(Dataset):
             logger.info(f"[removed] #PDB: {removed_list['pdb_id'].nunique()}")
             logger.info(
                 f"[filtered by min_n_token ({self.min_n_token})] #Rows: {len(indices_list)}"
+            )
+            self.check_indices_list(
+                indices_list, f"min_n_token ({self.min_n_token}) filtering"
             )
 
         # Filter by exclusion_dict
@@ -202,6 +210,9 @@ class BaseSingleDataset(Dataset):
             indices_list = indices_list[valid_mask].reset_index(drop=True)
             logger.info(
                 f"[Excluded by {col_name} -- {exclusion_list}] #Rows: {len(indices_list)}"
+            )
+            self.check_indices_list(
+                indices_list, f"exclusion_dict ({col_name}) filtering"
             )
         self.print_data_stats(indices_list)
 
@@ -244,12 +255,21 @@ class BaseSingleDataset(Dataset):
                         lambda x: x in EvaluationChainInterface
                     )
                 ]
+            self.check_indices_list(indices_list, "find_eval_chain_interface filtering")
         if self.limits > 0 and len(indices_list) > self.limits:
             logger.info(
                 f"Limit indices list size from {len(indices_list)} to {self.limits}"
             )
             indices_list = indices_list[: self.limits]
+            self.check_indices_list(indices_list, "limits filtering")
         return indices_list
+
+    def check_indices_list(self, indices_list, step_name: str = ""):
+        if len(indices_list) == 0:
+            msg = "After filtering, the dataset is empty."
+            if step_name:
+                msg = f"After {step_name}, the dataset is empty."
+            raise ValueError(msg)
 
     def print_data_stats(self, df: pd.DataFrame) -> None:
         """
@@ -260,17 +280,11 @@ class BaseSingleDataset(Dataset):
         """
         if self.name:
             logger.info("-" * 10 + f" Dataset {self.name}" + "-" * 10)
-        df["mol_group_type"] = df.apply(
-            lambda row: "_".join(
-                sorted(
-                    [
-                        str(row["mol_1_type"]),
-                        str(row["mol_2_type"]).replace("nan", "intra"),
-                    ]
-                )
-            ),
-            axis=1,
-        )
+        col1 = df["mol_1_type"].astype(str)
+        col2 = df["mol_2_type"].astype(str).str.replace("nan", "intra", regex=False)
+        lo = np.where(col1.values <= col2.values, col1.values, col2.values)
+        hi = np.where(col1.values <= col2.values, col2.values, col1.values)
+        df["mol_group_type"] = np.char.add(np.char.add(lo, "_"), hi)
 
         group_size_dict = dict(df["mol_group_type"].value_counts())
         for i, n_i in group_size_dict.items():
@@ -367,9 +381,7 @@ class BaseSingleDataset(Dataset):
 
         def _get_contiguous_array(array):
             array_uniq = np.sort(np.unique(array))
-            map_dict = {i: idx for idx, i in enumerate(array_uniq)}
-            new_array = np.vectorize(map_dict.get)(array)
-            return new_array
+            return np.searchsorted(array_uniq, array)
 
         atom_array.asym_id_int = _get_contiguous_array(atom_array.asym_id_int)
         atom_array.entity_id_int = _get_contiguous_array(atom_array.entity_id_int)
@@ -401,7 +413,7 @@ class BaseSingleDataset(Dataset):
 
         # Get shuffled token and atom array
         # Use `CropData.select_by_token_indices` to shuffle safely
-        token_array, atom_array, _, _ = CropData.select_by_token_indices(
+        (token_array, atom_array,) = CropData.select_by_token_indices(
             token_array=token_array,
             atom_array=atom_array,
             selected_token_indices=shuffled_token_indices,
@@ -424,9 +436,8 @@ class BaseSingleDataset(Dataset):
             x_unique = np.sort(np.unique(x))
             x_shuffled = x_unique.copy()
             np.random.shuffle(x_shuffled)  # shuffle in-place
-            map_dict = dict(zip(x_unique, x_shuffled))
-            new_x = np.vectorize(map_dict.get)(x)
-            return new_x.copy()
+            indices = np.searchsorted(x_unique, x)
+            return x_shuffled[indices].copy()
 
         for entity_id in np.unique(atom_array.label_entity_id):
             mask = atom_array.label_entity_id == entity_id
@@ -471,8 +482,6 @@ class BaseSingleDataset(Dataset):
             (
                 bioassembly_dict["token_array"],
                 bioassembly_dict["atom_array"],
-                _,
-                _,
             ) = CropData.select_by_token_indices(
                 token_array=bioassembly_dict["token_array"],
                 atom_array=bioassembly_dict["atom_array"],
@@ -649,7 +658,7 @@ class BaseSingleDataset(Dataset):
             df = self.indices_list.iloc[idx : idx + 1]
 
         # Only consider chain/interfaces defined in EvaluationChainInterface
-        df = df[df["eval_type"].apply(lambda x: x in EvaluationChainInterface)].copy()
+        df = df[df["eval_type"].isin(EvaluationChainInterface)].copy()
         if len(df) < 1:
             raise ValueError("Cannot find a chain/interface for evaluation in the PDB.")
 
@@ -1044,18 +1053,27 @@ def calc_weights_for_df(
         A pandas DataFrame with an column 'weights' containing the calculated weights.
     """
     # Specific to assembly, and entities (chain or interface)
-    indices_df["pdb_sorted_entity_id"] = indices_df.apply(
-        lambda x: f"{x['pdb_id']}_{x['assembly_id']}_{'_'.join(sorted([str(x['entity_1_id']), str(x['entity_2_id'])]))}",
-        axis=1,
+    e1 = indices_df["entity_1_id"].astype(str).values
+    e2 = indices_df["entity_2_id"].astype(str).values
+    lo = np.where(e1 <= e2, e1, e2)
+    hi = np.where(e1 <= e2, e2, e1)
+    indices_df["pdb_sorted_entity_id"] = (
+        indices_df["pdb_id"].astype(str)
+        + "_"
+        + indices_df["assembly_id"].astype(str)
+        + "_"
+        + lo
+        + "_"
+        + hi
     )
 
     entity_member_num_dict = {}
     for pdb_sorted_entity_id, sub_df in indices_df.groupby("pdb_sorted_entity_id"):
         # Number of repeatative entities in the same assembly
         entity_member_num_dict[pdb_sorted_entity_id] = len(sub_df)
-    indices_df["pdb_sorted_entity_id_member_num"] = indices_df.apply(
-        lambda x: entity_member_num_dict[x["pdb_sorted_entity_id"]], axis=1
-    )
+    indices_df["pdb_sorted_entity_id_member_num"] = indices_df[
+        "pdb_sorted_entity_id"
+    ].map(entity_member_num_dict)
 
     cluster_size_record = {}
     for cluster_id, sub_df in indices_df.groupby("cluster_id"):

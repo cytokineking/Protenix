@@ -26,23 +26,23 @@ from typing import List, Optional, Union
 import click
 import tqdm
 from Bio import SeqIO
+from ml_collections.config_dict import ConfigDict
+from rdkit import Chem
 
 from configs.configs_base import configs as configs_base
 from configs.configs_data import data_configs
 from configs.configs_inference import inference_configs
 from configs.configs_model_type import model_configs
-from ml_collections.config_dict import ConfigDict
 from protenix.config.config import parse_configs
 from protenix.data.inference.json_maker import cif_to_input_json
 from protenix.data.inference.json_parser import lig_file_to_atom_info
 from protenix.data.utils import pdb_to_cif
 from protenix.utils.logger import get_logger
-from rdkit import Chem
-
+from protenix.version import __version__
 from runner.inference import (
+    InferenceRunner,
     download_inference_cache,
     infer_predict,
-    InferenceRunner,
     update_gpu_compatible_configs,
 )
 from runner.msa_search import msa_search, update_infer_json
@@ -313,6 +313,7 @@ def get_default_runner(
     use_template: bool = False,
     use_rna_msa: bool = False,
     use_seeds_in_json: bool = False,
+    need_atom_confidence: bool = False,
     kalign_binary_path: Optional[str] = None,
 ) -> InferenceRunner:
     """
@@ -348,7 +349,17 @@ def get_default_runner(
     if seeds is not None:
         configs.seeds = seeds
     model_name = configs.model_name
-    _, model_size, model_feature, model_version = model_name.split("_")
+    model_name_parts = model_name.split("_", 3)
+    if len(model_name_parts) == 4:
+        _, model_size, model_feature, model_version = model_name_parts
+    else:
+        model_size = "unknown"
+        model_feature = "unknown"
+        model_version = "unknown"
+        logger.warning(
+            "Unexpected model_name format '%s'; expected protenix_<size>_<feature>_<version>.",
+            model_name,
+        )
     model_specfics_configs = ConfigDict(model_configs[model_name])
     # update model specific configs
     configs.update(model_specfics_configs)
@@ -366,6 +377,7 @@ def get_default_runner(
     configs.use_template = use_template
     configs.use_rna_msa = use_rna_msa
     configs.use_seeds_in_json = use_seeds_in_json
+    configs.need_atom_confidence = need_atom_confidence
     if kalign_binary_path is not None:
         # The path provided by the user is expected to exist by default
         configs.data.template.kalign_binary_path = kalign_binary_path
@@ -439,6 +451,7 @@ def inference_jsons(
     use_template: bool = False,
     use_rna_msa: bool = False,
     use_seeds_in_json: bool = False,
+    need_atom_confidence: bool = False,
     kalign_binary_path: Optional[str] = None,
     hmmsearch_binary_path: Optional[str] = None,
     hmmbuild_binary_path: Optional[str] = None,
@@ -519,6 +532,7 @@ def inference_jsons(
         use_template=use_template,
         use_rna_msa=use_rna_msa,
         use_seeds_in_json=use_seeds_in_json,
+        need_atom_confidence=need_atom_confidence,
         kalign_binary_path=kalign_binary_path,
     )
     configs = runner.configs
@@ -572,7 +586,7 @@ class SuggestGroup(click.Group):
 
 
 @click.group(cls=SuggestGroup, context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="1.0.0")
+@click.version_option(version=__version__)
 def protenix_cli() -> None:
     """
     Protenix: A trainable reproduction of AlphaFold 3.
@@ -670,6 +684,12 @@ def protenix_cli() -> None:
     help="Priority to seeds defined in input JSON.",
 )
 @click.option(
+    "--need_atom_confidence",
+    type=bool,
+    default=False,
+    help="Whether to compute atom-level confidence scores.",
+)
+@click.option(
     "--kalign_binary_path",
     type=str,
     default=None,
@@ -755,6 +775,7 @@ def predict(
     use_template: bool,
     use_rna_msa: bool,
     use_seeds_in_json: bool,
+    need_atom_confidence: bool,
     kalign_binary_path: Optional[str] = None,
     hmmsearch_binary_path: Optional[str] = None,
     hmmbuild_binary_path: Optional[str] = None,
@@ -790,6 +811,7 @@ def predict(
         use_template (bool): Use templates.
         use_rna_msa (bool): Use RNA MSA.
         use_seeds_in_json (bool): Use seeds from JSON.
+        need_atom_confidence (bool): Compute atom-level confidence scores.
         kalign_binary_path (Optional[str]): Path to kalign binary.
         hmmsearch_binary_path (Optional[str]): Path to hmmsearch binary.
         hmmbuild_binary_path (Optional[str]): Path to hmmbuild binary.
@@ -838,7 +860,12 @@ def predict(
         "cuequivariance",
         "torch",
     ], "Invalid trimul_kernel. Options: 'cuequivariance', 'torch'."
-    assert triatt_kernel in ["triattention", "cuequivariance", "deepspeed", "torch",], (
+    assert triatt_kernel in [
+        "triattention",
+        "cuequivariance",
+        "deepspeed",
+        "torch",
+    ], (
         "Invalid triatt_kernel. Options: 'triattention', "
         "'cuequivariance', 'deepspeed', 'torch'."
     )
@@ -902,6 +929,7 @@ def predict(
         use_template=use_template,
         use_rna_msa=use_rna_msa,
         use_seeds_in_json=use_seeds_in_json,
+        need_atom_confidence=need_atom_confidence,
         kalign_binary_path=kalign_binary_path,
         hmmsearch_binary_path=hmmsearch_binary_path,
         hmmbuild_binary_path=hmmbuild_binary_path,
@@ -940,11 +968,18 @@ def predict(
     type=str,
     help="Assembly ID for structure extension (default: no extension).",
 )
+@click.option(
+    "--include_discont_poly_poly_bonds",
+    default=False,
+    is_flag=True,
+    help="Whether to include discontinuous polymer-polymer bonds.",
+)
 def tojson(
     input: str,
     out_dir: str = "./output",
     altloc: str = "first",
     assembly_id: Optional[str] = None,
+    include_discont_poly_poly_bonds: bool = False,
 ) -> List[str]:
     """
     Convert PDB or CIF files to JSON files for Protenix inference.
@@ -954,6 +989,7 @@ def tojson(
         out_dir (str): Output directory for JSON files.
         altloc (str): Alternate location conformation selection.
         assembly_id (Optional[str]): Assembly ID for structure extension.
+        include_discont_poly_poly_bonds (bool): Whether to include discontinuous polymer-polymer bonds.
 
     Returns:
         List[str]: List of generated JSON file paths.
@@ -962,6 +998,7 @@ def tojson(
     logger.info(
         f"Run tojson with input={input}, out_dir={out_dir}, "
         f"altloc={altloc}, assembly_id={assembly_id}"
+        f", include_discont_poly_poly_bonds={include_discont_poly_poly_bonds}"
     )
     input_files = []
     if not os.path.exists(input):
@@ -999,6 +1036,7 @@ def tojson(
                     altloc=altloc,
                     sample_name=pdb_name,
                     output_json=output_json,
+                    include_discont_poly_poly_bonds=include_discont_poly_poly_bonds,
                 )
         elif input_file.endswith(".cif"):
             cif_to_input_json(
@@ -1006,6 +1044,7 @@ def tojson(
                 assembly_id=assembly_id,
                 altloc=altloc,
                 output_json=output_json,
+                include_discont_poly_poly_bonds=include_discont_poly_poly_bonds,
             )
         else:
             raise RuntimeError(f"can not read a special ligand_file: {input_file}")
@@ -1058,7 +1097,7 @@ def msa(input: str, out_dir: str, msa_server_mode: str) -> Union[str, dict]:
             protein_seqs.append(str(seq.seq))
         protein_seqs = sorted(protein_seqs)
         msa_res_subdirs = msa_search(protein_seqs, out_dir, msa_server_mode)
-        assert len(msa_res_subdirs) == len(msa_res_subdirs), "msa search failed"
+        assert len(msa_res_subdirs) == len(protein_seqs), "msa search failed"
         fasta_msa_res = dict(zip(protein_seqs, msa_res_subdirs))
         logger.info(
             f"msa result is: {fasta_msa_res}, and it has been save to {out_dir}"
