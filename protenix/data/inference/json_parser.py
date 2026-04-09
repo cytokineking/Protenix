@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import concurrent.futures
 import copy
 import random
 import warnings
@@ -444,6 +443,10 @@ def rdkit_mol_to_atom_info(mol: Chem.Mol) -> dict[str, Any]:
 
     # Atom_array without hydrogens
     atom_info["atom_array"] = rdkit_mol_to_atom_array(mol, removeHs=True)
+    mol.atom_map = {atom.GetProp("name"): atom.GetIdx() for atom in mol.GetAtoms()}
+    mol.ref_conf_id = 0
+    mol.ref_mask = np.ones(mol.GetNumAtoms(), dtype=bool)
+    atom_info["mol"] = mol
     return atom_info
 
 
@@ -502,16 +505,30 @@ def smiles_to_atom_info(smiles: str) -> dict:
     mol = Chem.MolFromSmiles(smiles)
     mol = Chem.AddHs(mol)
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        future = executor.submit(AllChem.EmbedMolecule, mol)
+    import queue
+    import threading
 
+    def target(mol, q):
         try:
-            ret_code = future.result(timeout=90)
-        except concurrent.futures.TimeoutError as exc:
-            raise TimeoutError(
-                'Conformer generation timed out.  \
-                    Please change the "ligand" input format to "CCD_" or "FILE_".'
-            ) from exc
+            ret = AllChem.EmbedMolecule(mol)
+            q.put(ret)
+        except Exception as e:
+            q.put(e)
+
+    q = queue.Queue()
+    t = threading.Thread(target=target, args=(mol, q))
+    t.daemon = True
+    t.start()
+
+    try:
+        ret_code = q.get(timeout=90)
+        if isinstance(ret_code, Exception):
+            raise ret_code
+    except queue.Empty:
+        raise TimeoutError(
+            'Conformer generation timed out.  \
+                Please change the "ligand" input format to "CCD_" or "FILE_".'
+        )
 
     if ret_code != 0:
         # retry with random coords
@@ -601,6 +618,7 @@ def add_entity_atom_array(single_job_dict: dict) -> dict:
     """
     single_job_dict = copy.deepcopy(single_job_dict)
     sequences = single_job_dict["sequences"]
+    single_job_dict["ccd_mols"] = {}
     smiles_ligand_count = 0
     for entity_info in sequences:
         if info := entity_info.get("proteinChain"):
@@ -616,6 +634,10 @@ def add_entity_atom_array(single_job_dict: dict) -> dict:
                 assert smiles_ligand_count <= 99, "too many smiles ligands"
                 # use lower case res_name (l01, l02, ..., l99) to avoid conflict with CCD code
                 atom_info["atom_array"].res_name[:] = f"l{smiles_ligand_count:02d}"
+                assert "mol" in atom_info, "failed to build rdkit mol from smiles/files"
+                single_job_dict["ccd_mols"][f"l{smiles_ligand_count:02d}"] = atom_info[
+                    "mol"
+                ]
         elif info := entity_info.get("ion"):
             atom_info = build_ligand(entity_info)
         else:

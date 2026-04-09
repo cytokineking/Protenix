@@ -21,6 +21,7 @@ from biotite.structure import AtomArray
 
 from protenix.data.constraint.constraint_featurizer import ConstraintFeatureGenerator
 from protenix.data.core.featurizer import Featurizer
+from protenix.data.core.geometry_featurizer import GeometryFeaturizer
 from protenix.data.core.parser import AddAtomArrayAnnot
 from protenix.data.inference.json_parser import (
     add_entity_atom_array,
@@ -34,7 +35,10 @@ logger = get_logger(__name__)
 
 
 class SampleDictToFeatures:
-    def __init__(self, single_sample_dict: dict[str, Any]) -> None:
+    def __init__(
+        self, single_sample_dict: dict[str, Any], extract_features_for_tfg: bool = False
+    ) -> None:
+        self.extract_features_for_tfg = extract_features_for_tfg
         self.single_sample_dict = single_sample_dict
         self.input_dict = add_entity_atom_array(single_sample_dict)
         self.entity_poly_type_and_seqs = self.get_entity_poly_type_and_seqs()
@@ -94,6 +98,32 @@ class SampleDictToFeatures:
         Returns:
             AtomArray: Biotite Atom array.
         """
+        used_chain_ids = set()
+        for seq_idx, type2entity_dict in enumerate(self.input_dict["sequences"]):
+            for entity in type2entity_dict.values():
+                if entity.get("id"):
+                    ids = entity["id"]
+                    if not isinstance(ids, list) or not all(
+                        isinstance(x, str) for x in ids
+                    ):
+                        raise ValueError(
+                            f'Invalid "id" field in sequences[{seq_idx}]: expecting list[str].'
+                        )
+                    if len(ids) != entity["count"]:
+                        raise ValueError(
+                            f'Invalid "id" field in sequences[{seq_idx}]: len(id)({len(ids)}) != count({entity["count"]}).'
+                        )
+                    if len(set(ids)) != len(ids):
+                        raise ValueError(
+                            f'Invalid "id" field in sequences[{seq_idx}]: duplicated chain IDs in the same entity.'
+                        )
+                    duplicated = set(ids) & used_chain_ids
+                    if duplicated:
+                        raise ValueError(
+                            f'Invalid "id" field in sequences[{seq_idx}]: duplicated chain IDs across entities: {sorted(duplicated)}.'
+                        )
+                    used_chain_ids.update(ids)
+
         atom_array = None
         asym_chain_idx = 0
         for idx, type2entity_dict in enumerate(self.input_dict["sequences"]):
@@ -101,8 +131,21 @@ class SampleDictToFeatures:
                 entity_id = str(idx + 1)
 
                 entity_atom_array = None
+                ids = entity.get("id")
+
                 for asym_chain_count in range(1, entity["count"] + 1):
-                    asym_id_str = int_to_letters(asym_chain_idx + 1)
+                    if ids:
+                        asym_id_str = str(ids[asym_chain_count - 1])
+                    else:
+                        while True:
+                            candidate = int_to_letters(asym_chain_idx + 1)
+                            if candidate not in used_chain_ids:
+                                asym_id_str = candidate
+                                used_chain_ids.add(asym_id_str)
+                                asym_chain_idx += 1
+                                break
+                            asym_chain_idx += 1
+
                     asym_chain = copy.deepcopy(entity["atom_array"])
                     chain_id = [asym_id_str] * len(asym_chain)
                     copy_id = [asym_chain_count] * len(asym_chain)
@@ -115,7 +158,6 @@ class SampleDictToFeatures:
                         entity_atom_array = asym_chain
                     else:
                         entity_atom_array += asym_chain
-                    asym_chain_idx += 1
 
                 entity_atom_array.set_annotation(
                     "label_entity_id", [entity_id] * len(entity_atom_array)
@@ -265,7 +307,7 @@ class SampleDictToFeatures:
         atom_array = AddAtomArrayAnnot.add_modified_res_mask(atom_array)
         atom_array = AddAtomArrayAnnot.unique_chain_and_add_ids(atom_array)
         atom_array = AddAtomArrayAnnot.find_equiv_mol_and_assign_ids(
-            atom_array, check_final_equiv=False
+            atom_array, entity_poly_type=entity_poly_type
         )
         atom_array = AddAtomArrayAnnot.add_ref_space_uid(atom_array)
         return atom_array
@@ -351,4 +393,12 @@ class SampleDictToFeatures:
         feature_dict["frame_atom_index"] = torch.Tensor(
             token_array_with_frame.get_annotation("frame_atom_index")
         ).long()
+        if self.extract_features_for_tfg:
+            geometry_featurizer = GeometryFeaturizer(
+                atom_array,
+                ccd_mols=self.input_dict["ccd_mols"],
+                exclude_std_residue=True,
+            )
+            feature_dict.update(geometry_featurizer.get_features())
+
         return feature_dict, atom_array, token_array

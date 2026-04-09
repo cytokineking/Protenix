@@ -62,6 +62,9 @@ protenix json --input ./examples/7pzb.pdb --out_dir ./output --altloc first
 # Advanced: Specify assembly ID for biological assemblies
 wget -P ./examples/ https://files.rcsb.org/download/7pzb.cif 
 protenix json --input ./examples/7pzb.cif --out_dir ./output --altloc first
+
+# Advanced: Keep discontinuous polymer-polymer bonds (e.g. cyclic-peptide)
+protenix json --input ./examples/2lwu.cif --out_dir ./output --altloc first --include_discont_poly_poly_bonds
 ```
 
 ### 2. Input Preprocessing (`prep`, `mt`, `msa`)
@@ -102,6 +105,7 @@ protenix pred --input examples/input.json --use_msa false --enable_cache true
 - `--seeds`: Comma-separated list of random seeds (e.g., `101,102`).
 - `--model_name`: Model variant selection (e.g., `protenix_base_default_v1.0.0`, `protenix_mini_default_v0.5.0`).
 - `--use_default_params`: (Default: `true`) Automatically configures cycles and steps based on the selected model. Set to `false` to manually override `--cycle` and `--step`.
+- `--use_tfg_guidance`: Enable Training-Free Guidance (TFG) for refined sampling.
 - `--use_msa` / `--use_template` / `--use_rna_msa`: (Default: `true`/`false`/`false`) Toggle specific features for inference.
 - `--dtype`: Set data type to `bf16` (default) or `fp32`.
 - `--trimul_kernel` / `--triatt_kernel`: Choose specialized kernels (e.g., `cuequivariance`, `triattention`) for hardware acceleration.

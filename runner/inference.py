@@ -394,6 +394,11 @@ def update_inference_configs(configs: Any, n_token: int) -> Any:
         Any: Updated configurations.
     """
     # Adjust configurations based on sequence length to manage memory usage
+    if n_token > 2560 and configs.model_name in ["protenix-v2"]:
+        raise AssertionError(
+            "protenix-v2 model does not support n_token > 2560. It might cause OOM."
+        )
+
     if n_token > 3840:
         configs.skip_amp.confidence_head = False
         configs.skip_amp.sample_diffusion = False
@@ -401,7 +406,10 @@ def update_inference_configs(configs: Any, n_token: int) -> Any:
         configs.skip_amp.confidence_head = False
         configs.skip_amp.sample_diffusion = True
     else:
-        configs.skip_amp.confidence_head = True
+        if configs.model_name in ["protenix-v2"]:
+            configs.skip_amp.confidence_head = False
+        else:
+            configs.skip_amp.confidence_head = True
         configs.skip_amp.sample_diffusion = True
 
     return configs
@@ -420,6 +428,12 @@ def infer_predict(runner: InferenceRunner, configs: Any) -> None:
     logger.info(f"Loading data from {configs.input_json_path}")
     with open(configs.input_json_path, "r", encoding="utf-8") as f:
         json_data = json.load(f)
+
+    if not isinstance(json_data, list) or len(json_data) == 0:
+        raise ValueError(
+            f"Input JSON must be a non-empty top-level list, got {type(json_data).__name__} "
+            f"from {configs.input_json_path}"
+        )
 
     seed_in_json = json_data[0].get("modelSeeds")
     if seed_in_json and configs.use_seeds_in_json:
@@ -485,7 +499,7 @@ def infer_predict(runner: InferenceRunner, configs: Any) -> None:
                 t2_end = time.time()
                 logger.info(
                     f"[Rank {DIST_WRAPPER.rank}] {sample_name} [seed:{seed}] succeeded. "
-                    f"Model forward time: {t2_end-t2_start:.2f}s. "
+                    f"Model forward time: {t2_end - t2_start:.2f}s. "
                     f"Results saved to {configs.dump_dir}"
                 )
                 torch.cuda.empty_cache()
@@ -504,7 +518,7 @@ def infer_predict(runner: InferenceRunner, configs: Any) -> None:
                 torch.cuda.empty_cache()
         t1_end = time.time()
         logger.info(
-            f"[Rank {DIST_WRAPPER.rank}] Seed {seed} completed in {t1_end-t1_start:.2f}s."
+            f"[Rank {DIST_WRAPPER.rank}] Seed {seed} completed in {t1_end - t1_start:.2f}s."
         )
     # Remove the error directory if it's empty
     if opexists(runner.error_dir):
@@ -515,7 +529,9 @@ def infer_predict(runner: InferenceRunner, configs: Any) -> None:
             pass
 
     t0_end = time.time()
-    logger.info(f"[Rank {DIST_WRAPPER.rank}] Job completed in {t0_end-t0_start:.2f}s.")
+    logger.info(
+        f"[Rank {DIST_WRAPPER.rank}] Job completed in {t0_end - t0_start:.2f}s."
+    )
 
 
 def main(configs: Any) -> None:
@@ -610,10 +626,26 @@ def run() -> None:
         f"Using params for model {model_name}: "
         f"cycle={configs.model.N_cycle}, step={configs.sample_diffusion.N_step}"
     )
-    _, model_size, model_feature, model_version = model_name.split("_")
+    model_name_parts = model_name.split("_", 3)
+    if len(model_name_parts) == 4:
+        _, model_size, model_feature, model_version = model_name_parts
+    elif model_name == "protenix-v2":
+        # The model naming convention has been simplified for newer versions.
+        # Hardcoding these values here to maintain backward compatibility.
+        model_size = "464M"
+        model_feature = "default"
+        model_version = "v2"
+    else:
+        model_size = "unknown"
+        model_feature = "unknown"
+        model_version = "unknown"
+        logger.warning(
+            "Unexpected model_name format '%s'; expected protenix_<size>_<feature>_<version>.",
+            model_name,
+        )
     logger.info(
         f"Inference by Protenix: model_size: {model_size}, "
-        f"with_feature: {model_feature.replace('-',', ')}, "
+        f"with_feature: {model_feature.replace('-', ', ')}, "
         f"model_version: {model_version}, dtype: {configs.dtype}"
     )
     configs = update_gpu_compatible_configs(configs)

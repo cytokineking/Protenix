@@ -22,6 +22,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 
+import requests
+
 import numpy as np
 from typing_extensions import Final, TypeAlias
 
@@ -223,27 +225,32 @@ class TemplateFeatures:
 
         return pseudo_beta, pseudo_beta_mask
 
+    # Pre-computed bin edges (class-level cache to avoid recomputation)
+    _dgram_cache: dict = {}
+
     @staticmethod
     def dgram_from_positions(
         positions: np.ndarray, config: DistogramFeaturesConfig
     ) -> np.ndarray:
         """Compute distogram from amino acid positions."""
-        lower_breaks = np.linspace(config.min_bin, config.max_bin, config.num_bins)
-        lower_breaks = np.square(lower_breaks)
-        upper_breaks = np.concatenate(
-            [lower_breaks[1:], np.array([1e8], dtype=np.float32)], axis=-1
-        )
-        dist2 = np.sum(
-            np.square(
-                np.expand_dims(positions, axis=-2) - np.expand_dims(positions, axis=-3)
-            ),
-            axis=-1,
-            keepdims=True,
-        )
+        cache_key = (config.min_bin, config.max_bin, config.num_bins)
+        if cache_key not in TemplateFeatures._dgram_cache:
+            lower = np.linspace(
+                config.min_bin, config.max_bin, config.num_bins, dtype=np.float32
+            )
+            lower = np.square(lower)
+            upper = np.empty_like(lower)
+            upper[:-1] = lower[1:]
+            upper[-1] = 1e8
+            TemplateFeatures._dgram_cache[cache_key] = (lower, upper)
+        lower_breaks, upper_breaks = TemplateFeatures._dgram_cache[cache_key]
 
-        dgram = (dist2 > lower_breaks).astype(np.float32) * (
-            dist2 < upper_breaks
-        ).astype(np.float32)
+        # Compute squared distances using einsum (avoids large intermediate)
+        pos = positions.astype(np.float32, copy=False)
+        diff = pos[:, np.newaxis, :] - pos[np.newaxis, :, :]
+        dist2 = np.einsum("ijk,ijk->ij", diff, diff)[..., np.newaxis]
+
+        dgram = ((dist2 > lower_breaks) & (dist2 < upper_breaks)).astype(np.float32)
         return dgram
 
     @staticmethod
@@ -254,11 +261,8 @@ class TemplateFeatures:
         epsilon: float = 1e-6,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Simplified calculation of template unit vector."""
-        # Get backbone indices (C, CA, N) for each residue from protein_data_processing
-        # Group 0: [C, CA, N]
-        backbone_indices = RESTYPE_RIGIDGROUP_DENSE_ATOM_IDX[aatype, 0]  # [num_res, 3]
+        backbone_indices = RESTYPE_RIGIDGROUP_DENSE_ATOM_IDX[aatype, 0]
 
-        # Indices according to protein_data_processing.py: C is 0, CA is 1, N is 2
         c_idx = backbone_indices[:, 0]
         ca_idx = backbone_indices[:, 1]
         n_idx = backbone_indices[:, 2]
@@ -266,9 +270,9 @@ class TemplateFeatures:
         num_res = aatype.shape[0]
         res_indices = np.arange(num_res)
 
-        c_pos = atom_positions[res_indices, c_idx]
-        ca_pos = atom_positions[res_indices, ca_idx]
-        n_pos = atom_positions[res_indices, n_idx]
+        c_pos = atom_positions[res_indices, c_idx].astype(np.float32, copy=False)
+        ca_pos = atom_positions[res_indices, ca_idx].astype(np.float32, copy=False)
+        n_pos = atom_positions[res_indices, n_idx].astype(np.float32, copy=False)
 
         c_mask = atom_mask[res_indices, c_idx]
         ca_mask = atom_mask[res_indices, ca_idx]
@@ -276,37 +280,30 @@ class TemplateFeatures:
 
         mask = (c_mask * ca_mask * n_mask).astype(np.float32)
 
-        # Local frame: origin at CA
-        # x-axis along C-CA (following original code convention)
+        # Local frame: CA origin, C-CA is x-axis (following AF3 convention)
+        # Uses einsum for inline norm computation instead of np.linalg.norm
         v1 = c_pos - ca_pos
         v2 = n_pos - ca_pos
 
-        e1 = v1 / (np.linalg.norm(v1, axis=-1, keepdims=True) + epsilon)
-        # Orthogonalize v2 against e1
-        e2 = v2 - np.sum(v2 * e1, axis=-1, keepdims=True) * e1
-        e2 = e2 / (np.linalg.norm(e2, axis=-1, keepdims=True) + epsilon)
-        # e3 = e1 x e2
+        v1_norm = np.sqrt(np.einsum("ij,ij->i", v1, v1))[:, np.newaxis] + epsilon
+        e1 = v1 / v1_norm
+        e2 = v2 - np.einsum("ij,ij->i", v2, e1)[:, np.newaxis] * e1
+        e2_norm = np.sqrt(np.einsum("ij,ij->i", e2, e2))[:, np.newaxis] + epsilon
+        e2 = e2 / e2_norm
         e3 = np.cross(e1, e2)
 
-        # Relative positions of all CA atoms to all local frames
-        # diff[i, j] = CA[j] - CA[i]
-        diff = ca_pos[None, :, :] - ca_pos[:, None, :]  # [num_res, num_res, 3]
+        # Build rotation matrix and transform via einsum
+        R = np.stack([e1, e2, e3], axis=-1)  # [num_res, 3, 3]
+        diff = ca_pos[np.newaxis, :, :] - ca_pos[:, np.newaxis, :]
+        unit_vector = np.einsum("ilk,ijl->ijk", R, diff)
 
-        # Transform to local frame: P' = R^T @ diff
-        # R = [e1 | e2 | e3] -> x' = e1 . diff, y' = e2 . diff, z' = e3 . diff
-        ux = np.sum(e1[:, None, :] * diff, axis=-1)
-        uy = np.sum(e2[:, None, :] * diff, axis=-1)
-        uz = np.sum(e3[:, None, :] * diff, axis=-1)
-
-        unit_vector = np.stack([ux, uy, uz], axis=-1)  # [num_res, num_res, 3]
-
-        # Normalize to unit vector
-        uv_norm = np.linalg.norm(unit_vector, axis=-1, keepdims=True)
-        unit_vector = unit_vector / (uv_norm + epsilon)
+        uv_norm = np.sqrt(
+            np.einsum("ijk,ijk->ij", unit_vector, unit_vector)
+        )[..., np.newaxis] + epsilon
+        unit_vector = unit_vector / uv_norm
 
         # 2D mask
         mask_2d = mask[:, None] * mask[None, :]
-
         return unit_vector, mask_2d
 
 
@@ -387,22 +384,48 @@ class TemplateHitFilter:
 class TemplateHitProcessor:
     """Processes a template hit to generate features."""
 
+    _PDBE_CIF_URL = "https://www.ebi.ac.uk/pdbe/entry-files/download/{pdb_id}.cif"
+
     def __init__(
         self,
         mmcif_dir: str,
         template_cache_dir: Optional[str] = None,
         kalign_binary_path: Optional[str] = None,
         _zero_center_positions: bool = True,
+        fetch_remote: bool = False,
     ):
         self._mmcif_dir = mmcif_dir
         self._template_cache_dir = template_cache_dir
         self._kalign_binary_path = kalign_binary_path
         self._zero_center_positions = _zero_center_positions
+        self._fetch_remote = fetch_remote
 
     def _read_file(self, path: str) -> str:
         """Reads file content."""
         with open(path, "r") as f:
             return f.read()
+
+    def _fetch_or_read_cif(self, pdb_id: str) -> str:
+        """Read mmCIF from local dir, falling back to PDBe API if fetch_remote is enabled."""
+        cif_path = os.path.join(self._mmcif_dir, f"{pdb_id}.cif")
+        if os.path.exists(cif_path):
+            return self._read_file(cif_path)
+
+        if not self._fetch_remote:
+            raise FileNotFoundError(f"CIF not found: {cif_path}")
+
+        url = self._PDBE_CIF_URL.format(pdb_id=pdb_id.lower())
+        logger.info(f"Fetching mmCIF for {pdb_id} from {url}")
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        cif_str = response.text
+
+        os.makedirs(self._mmcif_dir, exist_ok=True)
+        with open(cif_path, "w") as f:
+            f.write(cif_str)
+        logger.info(f"Cached mmCIF for {pdb_id} at {cif_path}")
+
+        return cif_str
 
     def _get_atom_coords(
         self,
@@ -474,17 +497,18 @@ class TemplateHitProcessor:
     ):
         """Verifies that distance between consecutive CA atoms is within limits."""
         ca_idx = ATOM37_ORDER["CA"]
-        prev_pos = None
-        for i, (p, m) in enumerate(zip(pos, mask)):
-            if m[ca_idx]:
-                curr_pos = p[ca_idx]
-                if prev_pos is not None:
-                    dist = np.linalg.norm(curr_pos - prev_pos)
-                    if dist > max_dist:
-                        raise CaDistanceError(
-                            f"Distance between residues {i} and previous is {dist:.2f} > {max_dist}"
-                        )
-                prev_pos = curr_pos
+        ca_mask = mask[:, ca_idx].astype(bool)
+        if ca_mask.sum() < 2:
+            return
+        ca_pos = pos[ca_mask, ca_idx, :]
+        diffs = ca_pos[1:] - ca_pos[:-1]
+        dists = np.sqrt(np.einsum("ij,ij->i", diffs, diffs))
+        max_found = dists.max()
+        if max_found > max_dist:
+            bad_idx = int(np.argmax(dists))
+            raise CaDistanceError(
+                f"Distance between residues at index {bad_idx} is {max_found:.2f} > {max_dist}"
+            )
 
     def _get_atom_positions(
         self,
@@ -669,18 +693,15 @@ class TemplateHitProcessor:
             else:
                 return SingleHitResult(None, None, None, None), track
         else:
-            # The raw mmCIF file can be split into per-chain files named
-            # {pdb_id}_{chain_id}.cif to accelerate the loading process.
-            cif_path = os.path.join(self._mmcif_dir, f"{pdb_id}.cif")
             try:
-                cif_str = self._read_file(cif_path)
+                cif_str = self._fetch_or_read_cif(pdb_id)
                 res = TemplateParser.parse(
                     file_id=pdb_id, mmcif_string=cif_str, auth_chain_id=chain_id
                 )
                 track["load"] = time.time() - t_start
-            except FileNotFoundError:
+            except (FileNotFoundError, requests.RequestException) as e:
                 return (
-                    SingleHitResult(None, None, f"CIF not found: {cif_path}", None),
+                    SingleHitResult(None, None, f"CIF load failed for {pdb_id}: {e}", None),
                     track,
                 )
 
@@ -766,6 +787,7 @@ class TemplateHitFeaturizer:
         _shuffle_top_k_prefiltered: Optional[int] = None,
         _zero_center_positions: bool = True,
         _max_template_candidates_num: Optional[int] = None,
+        fetch_remote: bool = False,
     ):
         self._mmcif_dir = mmcif_dir
         self._template_cache_dir = template_cache_dir
@@ -775,6 +797,7 @@ class TemplateHitFeaturizer:
         self._shuffle_top_k_prefiltered = _shuffle_top_k_prefiltered
         self._zero_center_positions = _zero_center_positions
         self._max_template_candidates_num = _max_template_candidates_num
+        self._fetch_remote = fetch_remote
 
         if max_template_date:
             if isinstance(max_template_date, str):
@@ -816,6 +839,7 @@ class TemplateHitFeaturizer:
             template_cache_dir=self._template_cache_dir,
             kalign_binary_path=self._kalign_binary_path,
             _zero_center_positions=self._zero_center_positions,
+            fetch_remote=self._fetch_remote,
         )
 
     def _parse_release_dates(self, path: str) -> Dict[str, datetime]:

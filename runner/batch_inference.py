@@ -37,6 +37,7 @@ from protenix.data.inference.json_maker import cif_to_input_json
 from protenix.data.inference.json_parser import lig_file_to_atom_info
 from protenix.data.utils import pdb_to_cif
 from protenix.utils.logger import get_logger
+from protenix.version import __version__
 from rdkit import Chem
 
 from runner.inference import (
@@ -313,7 +314,9 @@ def get_default_runner(
     use_template: bool = False,
     use_rna_msa: bool = False,
     use_seeds_in_json: bool = False,
+    need_atom_confidence: bool = False,
     kalign_binary_path: Optional[str] = None,
+    use_tfg_guidance: bool = False,
 ) -> InferenceRunner:
     """
     Get a default InferenceRunner with the specified configurations.
@@ -335,6 +338,7 @@ def get_default_runner(
         use_rna_msa (bool): Whether to use RNA MSA.
         use_seeds_in_json (bool): Whether to use seeds defined in the JSON file.
         kalign_binary_path (Optional[str]): Path to kalign binary.
+        use_tfg_guidance (bool): Whether to use TFG guidance.
 
     Returns:
         InferenceRunner: An instance of InferenceRunner.
@@ -348,7 +352,23 @@ def get_default_runner(
     if seeds is not None:
         configs.seeds = seeds
     model_name = configs.model_name
-    _, model_size, model_feature, model_version = model_name.split("_")
+    model_name_parts = model_name.split("_", 3)
+    if len(model_name_parts) == 4:
+        _, model_size, model_feature, model_version = model_name_parts
+    elif model_name == "protenix-v2":
+        # The model naming convention has been simplified for newer versions.
+        # Hardcoding these values here to maintain backward compatibility.
+        model_size = "464M"
+        model_feature = "default"
+        model_version = "v2"
+    else:
+        model_size = "unknown"
+        model_feature = "unknown"
+        model_version = "unknown"
+        logger.warning(
+            "Unexpected model_name format '%s'; expected protenix_<size>_<feature>_<version>.",
+            model_name,
+        )
     model_specfics_configs = ConfigDict(model_configs[model_name])
     # update model specific configs
     configs.update(model_specfics_configs)
@@ -366,6 +386,7 @@ def get_default_runner(
     configs.use_template = use_template
     configs.use_rna_msa = use_rna_msa
     configs.use_seeds_in_json = use_seeds_in_json
+    configs.need_atom_confidence = need_atom_confidence
     if kalign_binary_path is not None:
         # The path provided by the user is expected to exist by default
         configs.data.template.kalign_binary_path = kalign_binary_path
@@ -400,6 +421,7 @@ def get_default_runner(
                     "3. Download from: https://github.com/TimoLassmann/kalign\n"
                     "After installation, make sure the binary is accessible in PATH or provide kalign_binary_path."
                 )
+    configs.sample_diffusion.guidance.enable = use_tfg_guidance
 
     configs = update_gpu_compatible_configs(configs)
     logger.info(
@@ -439,7 +461,9 @@ def inference_jsons(
     use_template: bool = False,
     use_rna_msa: bool = False,
     use_seeds_in_json: bool = False,
+    need_atom_confidence: bool = False,
     kalign_binary_path: Optional[str] = None,
+    use_tfg_guidance: bool = False,
     hmmsearch_binary_path: Optional[str] = None,
     hmmbuild_binary_path: Optional[str] = None,
     seqres_database_path: Optional[str] = None,
@@ -474,6 +498,7 @@ def inference_jsons(
         use_rna_msa (bool): Whether to use RNA MSA.
         use_seeds_in_json (bool): Whether to use seeds from JSON.
         kalign_binary_path (Optional[str]): Path to kalign binary.
+        use_tfg_guidance (bool): Use TFG guidance.
         hmmsearch_binary_path (Optional[str]): Path to hmmsearch binary.
         hmmbuild_binary_path (Optional[str]): Path to hmmbuild binary.
         seqres_database_path (Optional[str]): Path to sequence database.
@@ -519,7 +544,9 @@ def inference_jsons(
         use_template=use_template,
         use_rna_msa=use_rna_msa,
         use_seeds_in_json=use_seeds_in_json,
+        need_atom_confidence=need_atom_confidence,
         kalign_binary_path=kalign_binary_path,
+        use_tfg_guidance=use_tfg_guidance,
     )
     configs = runner.configs
     for _, infer_json in enumerate(tqdm.tqdm(infer_jsons)):
@@ -572,7 +599,7 @@ class SuggestGroup(click.Group):
 
 
 @click.group(cls=SuggestGroup, context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="1.0.0")
+@click.version_option(version=__version__)
 def protenix_cli() -> None:
     """
     Protenix: A trainable reproduction of AlphaFold 3.
@@ -670,10 +697,22 @@ def protenix_cli() -> None:
     help="Priority to seeds defined in input JSON.",
 )
 @click.option(
+    "--need_atom_confidence",
+    type=bool,
+    default=False,
+    help="Whether to compute atom-level confidence scores.",
+)
+@click.option(
     "--kalign_binary_path",
     type=str,
     default=None,
     help="Path to kalign (searches in PATH if not provided).",
+)
+@click.option(
+    "--use_tfg_guidance",
+    type=bool,
+    default=False,
+    help="Use Training-Free Guidance (TFG) for inference.",
 )
 @click.option(
     "--hmmsearch_binary_path",
@@ -755,7 +794,9 @@ def predict(
     use_template: bool,
     use_rna_msa: bool,
     use_seeds_in_json: bool,
+    need_atom_confidence: bool,
     kalign_binary_path: Optional[str] = None,
+    use_tfg_guidance: bool = False,
     hmmsearch_binary_path: Optional[str] = None,
     hmmbuild_binary_path: Optional[str] = None,
     seqres_database_path: Optional[str] = None,
@@ -790,7 +831,9 @@ def predict(
         use_template (bool): Use templates.
         use_rna_msa (bool): Use RNA MSA.
         use_seeds_in_json (bool): Use seeds from JSON.
+        need_atom_confidence (bool): Compute atom-level confidence scores.
         kalign_binary_path (Optional[str]): Path to kalign binary.
+        use_tfg_guidance (bool): Use TFG guidance.
         hmmsearch_binary_path (Optional[str]): Path to hmmsearch binary.
         hmmbuild_binary_path (Optional[str]): Path to hmmbuild binary.
         seqres_database_path (Optional[str]): Path to sequence database.
@@ -810,6 +853,7 @@ def predict(
             "protenix_base_constraint_v0.5.0",
             "protenix_base_default_v1.0.0",
             "protenix_base_20250630_v1.0.0",
+            "protenix-v2",
         ]:
             cycle = 10
             step = 200
@@ -848,7 +892,8 @@ def predict(
         assert model_name in [
             "protenix_base_default_v1.0.0",
             "protenix_base_20250630_v1.0.0",
-        ], "Only protenix_base_default_v1.0.0 and protenix_base_20250630_v1.0.0 supports template inference."
+            "protenix-v2",
+        ], "Only protenix_base_default_v1.0.0, protenix_base_20250630_v1.0.0 and protenix-v2 supports template inference."
         logger.info("=" * 50)
         logger.info(
             "Using templates for inference. Template files should have "
@@ -863,7 +908,8 @@ def predict(
         assert model_name in [
             "protenix_base_default_v1.0.0",
             "protenix_base_20250630_v1.0.0",
-        ], "Only protenix_base_default_v1.0.0 and protenix_base_20250630_v1.0.0 supports RNA MSA inference."
+            "protenix-v2",
+        ], "Only protenix_base_default_v1.0.0, protenix_base_20250630_v1.0.0 and protenix-v2 supports RNA MSA inference."
         logger.info("=" * 50)
         logger.info(
             "Using RNA MSA for inference. RNA MSA files should have .a3m "
@@ -882,7 +928,10 @@ def predict(
             "using seeds from modelSeeds defined in the JSON."
         )
         logger.info("=" * 50)
-
+    if use_tfg_guidance:
+        logger.info("=" * 50)
+        logger.info("Using Training-Free Guidance (TFG) for inference.\n")
+        logger.info("=" * 50)
     inference_jsons(
         input,
         out_dir,
@@ -902,7 +951,9 @@ def predict(
         use_template=use_template,
         use_rna_msa=use_rna_msa,
         use_seeds_in_json=use_seeds_in_json,
+        need_atom_confidence=need_atom_confidence,
         kalign_binary_path=kalign_binary_path,
+        use_tfg_guidance=use_tfg_guidance,
         hmmsearch_binary_path=hmmsearch_binary_path,
         hmmbuild_binary_path=hmmbuild_binary_path,
         seqres_database_path=seqres_database_path,
@@ -940,11 +991,18 @@ def predict(
     type=str,
     help="Assembly ID for structure extension (default: no extension).",
 )
+@click.option(
+    "--include_discont_poly_poly_bonds",
+    default=False,
+    is_flag=True,
+    help="Whether to include discontinuous polymer-polymer bonds.",
+)
 def tojson(
     input: str,
     out_dir: str = "./output",
     altloc: str = "first",
     assembly_id: Optional[str] = None,
+    include_discont_poly_poly_bonds: bool = False,
 ) -> List[str]:
     """
     Convert PDB or CIF files to JSON files for Protenix inference.
@@ -954,6 +1012,7 @@ def tojson(
         out_dir (str): Output directory for JSON files.
         altloc (str): Alternate location conformation selection.
         assembly_id (Optional[str]): Assembly ID for structure extension.
+        include_discont_poly_poly_bonds (bool): Whether to include discontinuous polymer-polymer bonds.
 
     Returns:
         List[str]: List of generated JSON file paths.
@@ -962,6 +1021,7 @@ def tojson(
     logger.info(
         f"Run tojson with input={input}, out_dir={out_dir}, "
         f"altloc={altloc}, assembly_id={assembly_id}"
+        f", include_discont_poly_poly_bonds={include_discont_poly_poly_bonds}"
     )
     input_files = []
     if not os.path.exists(input):
@@ -999,6 +1059,7 @@ def tojson(
                     altloc=altloc,
                     sample_name=pdb_name,
                     output_json=output_json,
+                    include_discont_poly_poly_bonds=include_discont_poly_poly_bonds,
                 )
         elif input_file.endswith(".cif"):
             cif_to_input_json(
@@ -1006,6 +1067,7 @@ def tojson(
                 assembly_id=assembly_id,
                 altloc=altloc,
                 output_json=output_json,
+                include_discont_poly_poly_bonds=include_discont_poly_poly_bonds,
             )
         else:
             raise RuntimeError(f"can not read a special ligand_file: {input_file}")
@@ -1058,7 +1120,7 @@ def msa(input: str, out_dir: str, msa_server_mode: str) -> Union[str, dict]:
             protein_seqs.append(str(seq.seq))
         protein_seqs = sorted(protein_seqs)
         msa_res_subdirs = msa_search(protein_seqs, out_dir, msa_server_mode)
-        assert len(msa_res_subdirs) == len(msa_res_subdirs), "msa search failed"
+        assert len(msa_res_subdirs) == len(protein_seqs), "msa search failed"
         fasta_msa_res = dict(zip(protein_seqs, msa_res_subdirs))
         logger.info(
             f"msa result is: {fasta_msa_res}, and it has been save to {out_dir}"

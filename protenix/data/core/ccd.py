@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import functools
 import pickle
 from collections import defaultdict
@@ -23,10 +24,9 @@ import biotite.structure as struc
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
 from biotite.structure import AtomArray
-
-from configs.configs_data import data_configs
 from rdkit import Chem
 
+from configs.configs_data import data_configs
 from protenix.data.core.substructure_perms import get_substructure_perms
 from protenix.utils.logger import get_logger
 
@@ -91,7 +91,9 @@ def get_component_atom_array(
         logger.warning(f"Warning: get_component_atom_array() can not parse {ccd_code}")
         return None
     try:
-        comp = pdbx.get_component(ccd_cif, data_block=ccd_code, use_ideal_coord=True)
+        comp = pdbx.get_component(
+            ccd_cif, data_block=ccd_code, use_ideal_coord=True, allow_missing_coord=True
+        )
     except biotite.InvalidFileError as e:
         # Eg: UNL without atom.
         logger.warning(
@@ -113,8 +115,8 @@ def get_component_atom_array(
     # Map central atom index to leaving group (atom_indices) in component (atom_array).
     comp.central_to_leaving_groups = _map_central_to_leaving_groups(comp)
     if comp.central_to_leaving_groups is None:
-        logger.warning(
-            f"Warning: ccd {ccd_code} has leaving atom group bond to more than one central atom, central_to_leaving_groups is None."
+        logger.debug(
+            f"CCD {ccd_code} has leaving atom group bond to more than one central atom, central_to_leaving_groups is None."
         )
     return comp
 
@@ -217,7 +219,12 @@ def get_component_rdkit_mol(ccd_code: str) -> Union[Chem.Mol, None]:
 
 
 @functools.lru_cache
-def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
+def get_ccd_ref_info(
+    ccd_code: str,
+    return_perm: bool = True,
+    ccd_mols: Optional[tuple[tuple[str, Chem.Mol]]] = None,
+    return_atomic_number: bool = False,
+) -> dict[str, Any]:
     """
     Ref: AlphaFold3 SI Chapter 2.8
     Reference features. Features derived from a residue, nucleotide or ligand’s reference conformer.
@@ -232,6 +239,8 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
     Args:
         name (str): CCD name
         return_perm (bool): return atom permutations.
+        ccd_mols (Optional[tuple[tuple[str, Chem.Mol]]]): The self-defined CCD molecules. Defaults to None.
+        return_atomic_number (bool): whether to return atomic numbers.
 
     Returns:
         Dict:
@@ -240,8 +249,18 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
             coord: atom coordinates
             charge: atom formal charge
             perm: atom permutation
+            atomic_number: atomic number
     """
-    mol = get_component_rdkit_mol(ccd_code)
+    if ccd_mols is None:
+        ccd_mols = {}
+    else:
+        ccd_mols = {k: v for k, v in ccd_mols}
+
+    if ccd_code in ccd_mols:
+        mol = copy.deepcopy(ccd_mols[ccd_code])
+    else:
+        mol = copy.deepcopy(get_component_rdkit_mol(ccd_code))
+
     if mol is None:
         return {}
     if mol.GetNumAtoms() == 0:  # eg: "UNL"
@@ -261,6 +280,10 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
         "mask": mol.ref_mask,  # np.ndarray[bool]: atom mask, shape:(n_atom,)
         "charge": charge,  # np.ndarray[int]: atom formal charge, shape:(n_atom,)
     }
+    if return_atomic_number:
+        results["atomic_number"] = np.array(
+            [atom.GetAtomicNum() for atom in mol.GetAtoms()]
+        )
 
     if return_perm:
         try:
@@ -278,8 +301,9 @@ def get_ccd_ref_info(ccd_code: str, return_perm: bool = True) -> dict[str, Any]:
                     ]
                 ]
             )
-        # np.ndarray[int]: atom permutation, shape:(n_atom_wo_h, n_perm)
-        results["perm"] = perm.T
+        results["perm"] = (
+            perm.T
+        )  # np.ndarray[int]: atom permutation, shape:(n_atom_wo_h, n_perm)
 
     return results
 
