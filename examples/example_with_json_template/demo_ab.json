@@ -1,0 +1,74 @@
+[
+  {
+    "name": "000481_ligand_only",
+    "sequences": [
+      {
+        "proteinChain": {
+          "count": 1,
+          "sequence": "QLQLVESGGGSVQAGGSLTLSCTASESISKRIHGIGWFRQRRGEQREEIAYITTGGRPNLGDSVKDRFTISRDKSNGTVYLQMNSLKPEDTAVYYCHGMTAEYRVSAINHGWGQGTQVTVSS",
+          "unpairedMsaPath": "",
+          "pairedMsaPath": "",
+          "templatesPath": "examples/case_with_json_template/h_seq.json"
+        }
+      }
+    ],
+    "modelSeeds": [
+      101
+    ],
+    "assembly_id": "1"
+  },
+  {
+    "name": "000481_ligand_template",
+    "sequences": [
+      {
+        "proteinChain": {
+          "count": 1,
+          "sequence": "MKEPCFREENANFNKIFLPTIYSIIFLTGIVGNGLVILVMGYQKKLRSMTDKYRLHLSVADLLFVITLPFWAVDAVANWYFGNFLCKAVHVIYTVSLYSSVLILAFISLDRYLAIVHATNSQRPRKLLAEKVVYVGVWIPALLLTIPDFIFANVSEADDRYICDRFYPNDLWVVVFQFQHIMVGLILPGIVILSCYCIIISKLSHSKGHQKRKALKTTVILILAFFACWLPYYIGISIDSFILLEIIKQGCEFENTVHKWISITEALAFFHCCLNPILYAFLGA",
+          "unpairedMsaPath": "",
+          "pairedMsaPath": "",
+          "templatesPath": "examples/case_with_json_template/a_seq.json"
+        }
+      },
+      {
+        "proteinChain": {
+          "count": 1,
+          "sequence": "QLQLVESGGGSVQAGGSLTLSCTASESISKRIHGIGWFRQRRGEQREEIAYITTGGRPNLGDSVKDRFTISRDKSNGTVYLQMNSLKPEDTAVYYCHGMTAEYRVSAINHGWGQGTQVTVSS",
+          "unpairedMsaPath": "",
+          "pairedMsaPath": "",
+          "templatesPath": "examples/case_with_json_template/h_seq.json"
+        }
+      }
+    ],
+    "modelSeeds": [
+      101
+    ],
+    "assembly_id": "1"
+  },
+  {
+    "name": "000481",
+    "sequences": [
+      {
+        "proteinChain": {
+          "count": 1,
+          "sequence": "MKEPCFREENANFNKIFLPTIYSIIFLTGIVGNGLVILVMGYQKKLRSMTDKYRLHLSVADLLFVITLPFWAVDAVANWYFGNFLCKAVHVIYTVSLYSSVLILAFISLDRYLAIVHATNSQRPRKLLAEKVVYVGVWIPALLLTIPDFIFANVSEADDRYICDRFYPNDLWVVVFQFQHIMVGLILPGIVILSCYCIIISKLSHSKGHQKRKALKTTVILILAFFACWLPYYIGISIDSFILLEIIKQGCEFENTVHKWISITEALAFFHCCLNPILYAFLGA",
+          "unpairedMsaPath": "",
+          "pairedMsaPath": "",
+          "templatesPath": "examples/case_with_json_template/a_seq_2.json"
+        }
+      },
+      {
+        "proteinChain": {
+          "count": 1,
+          "sequence": "QLQLVESGGGSVQAGGSLTLSCTASESISKRIHGIGWFRQRRGEQREEIAYITTGGRPNLGDSVKDRFTISRDKSNGTVYLQMNSLKPEDTAVYYCHGMTAEYRVSAINHGWGQGTQVTVSS",
+          "unpairedMsaPath": "",
+          "pairedMsaPath": "",
+          "templatesPath": "examples/case_with_json_template/h_seq.json"
+        }
+      }
+    ],
+    "modelSeeds": [
+      101
+    ],
+    "assembly_id": "1"
+  }
+]
