@@ -1,6 +1,6 @@
 [
   {
-    "name": "000481_ligand_only",
+    "name": "demo_ligand_only",
     "sequences": [
       {
         "proteinChain": {
@@ -8,7 +8,7 @@
           "sequence": "QLQLVESGGGSVQAGGSLTLSCTASESISKRIHGIGWFRQRRGEQREEIAYITTGGRPNLGDSVKDRFTISRDKSNGTVYLQMNSLKPEDTAVYYCHGMTAEYRVSAINHGWGQGTQVTVSS",
           "unpairedMsaPath": "",
           "pairedMsaPath": "",
-          "templatesPath": "examples/case_with_json_template/h_seq.json"
+          "templatesPath": "examples/example_with_json_template/h_seq.json"
         }
       }
     ],
@@ -18,7 +18,7 @@
     "assembly_id": "1"
   },
   {
-    "name": "000481_ligand_template",
+    "name": "demo_ligand_template",
     "sequences": [
       {
         "proteinChain": {
@@ -26,7 +26,7 @@
           "sequence": "MKEPCFREENANFNKIFLPTIYSIIFLTGIVGNGLVILVMGYQKKLRSMTDKYRLHLSVADLLFVITLPFWAVDAVANWYFGNFLCKAVHVIYTVSLYSSVLILAFISLDRYLAIVHATNSQRPRKLLAEKVVYVGVWIPALLLTIPDFIFANVSEADDRYICDRFYPNDLWVVVFQFQHIMVGLILPGIVILSCYCIIISKLSHSKGHQKRKALKTTVILILAFFACWLPYYIGISIDSFILLEIIKQGCEFENTVHKWISITEALAFFHCCLNPILYAFLGA",
           "unpairedMsaPath": "",
           "pairedMsaPath": "",
-          "templatesPath": "examples/case_with_json_template/a_seq.json"
+          "templatesPath": "examples/example_with_json_template/a_seq.json"
         }
       },
       {
@@ -35,7 +35,7 @@
           "sequence": "QLQLVESGGGSVQAGGSLTLSCTASESISKRIHGIGWFRQRRGEQREEIAYITTGGRPNLGDSVKDRFTISRDKSNGTVYLQMNSLKPEDTAVYYCHGMTAEYRVSAINHGWGQGTQVTVSS",
           "unpairedMsaPath": "",
           "pairedMsaPath": "",
-          "templatesPath": "examples/case_with_json_template/h_seq.json"
+          "templatesPath": "examples/example_with_json_template/h_seq.json"
         }
       }
     ],
@@ -45,7 +45,7 @@
     "assembly_id": "1"
   },
   {
-    "name": "000481",
+    "name": "demo_base",
     "sequences": [
       {
         "proteinChain": {
@@ -53,7 +53,7 @@
           "sequence": "MKEPCFREENANFNKIFLPTIYSIIFLTGIVGNGLVILVMGYQKKLRSMTDKYRLHLSVADLLFVITLPFWAVDAVANWYFGNFLCKAVHVIYTVSLYSSVLILAFISLDRYLAIVHATNSQRPRKLLAEKVVYVGVWIPALLLTIPDFIFANVSEADDRYICDRFYPNDLWVVVFQFQHIMVGLILPGIVILSCYCIIISKLSHSKGHQKRKALKTTVILILAFFACWLPYYIGISIDSFILLEIIKQGCEFENTVHKWISITEALAFFHCCLNPILYAFLGA",
           "unpairedMsaPath": "",
           "pairedMsaPath": "",
-          "templatesPath": "examples/case_with_json_template/a_seq_2.json"
+          "templatesPath": "examples/example_with_json_template/a_seq_2.json"
         }
       },
       {
@@ -62,7 +62,7 @@
           "sequence": "QLQLVESGGGSVQAGGSLTLSCTASESISKRIHGIGWFRQRRGEQREEIAYITTGGRPNLGDSVKDRFTISRDKSNGTVYLQMNSLKPEDTAVYYCHGMTAEYRVSAINHGWGQGTQVTVSS",
           "unpairedMsaPath": "",
           "pairedMsaPath": "",
-          "templatesPath": "examples/case_with_json_template/h_seq.json"
+          "templatesPath": "examples/example_with_json_template/h_seq.json"
         }
       }
     ],

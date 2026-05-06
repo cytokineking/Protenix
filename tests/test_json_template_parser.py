@@ -9,7 +9,7 @@ from protenix.data.constants import ATOM37_NUM
 class TestJsonTemplateParser(unittest.TestCase):
     def test_json_template_parser(self):
         # Load the JSON file
-        json_path = "examples/examples_with_json_template/demo_ab.json"
+        json_path = "examples/example_with_json_template/demo_ab.json"
         self.assertTrue(os.path.exists(json_path), f"File {json_path} does not exist")
         
         with open(json_path, "r") as f:
