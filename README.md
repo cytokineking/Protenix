@@ -86,6 +86,8 @@ protenix score --input ./structures --output ./score_out --recursive
 - **protenix_base_20250630_v1.0.0**: Applied model, trained with an updated data cutoff (2025-06-30) for better practical performance. This model can be used for practical application scenarios.
 - **protenix_base_default_v0.5.0**: Previous version of the model, maintained primarily for backward compatibility with users who developed based on v0.5.0.
 
+The `protenix-v2` checkpoint is downloaded from the Hugging Face mirror at `TMF001/pxdesign-weights` by default because the upstream ByteDance checkpoint endpoint can be inaccessible outside China. The downloader verifies the published SHA256 checksum for this checkpoint. Other checkpoints and common runtime assets continue to use the upstream ByteDance URLs.
+
 For a complete list of supported models, please refer to [Supported Models](docs/supported_models.md).
 
 For detailed instructions on installation, data preprocessing, inference, and training, please refer to the [Training and Inference Instructions](docs/training_inference_instructions.md). We recommend users refer to [inference_demo.sh](inference_demo.sh) for detailed inference methods and input explanations.

@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import hashlib
 import json
 import logging
 import os
@@ -35,7 +36,7 @@ from protenix.model.protenix import Protenix
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.seed import seed_everything
 from protenix.utils.torch_utils import to_device
-from protenix.web_service.dependency_url import URL
+from protenix.web_service.dependency_url import CHECKPOINT_SHA256, URL
 
 from runner.dumper import DataDumper
 
@@ -270,22 +271,49 @@ def progress_callback(block_num: int, block_size: int, total_size: int) -> None:
         print()
 
 
+def sha256_file(path: str) -> str:
+    """Return the SHA256 digest for a local file."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def download_from_url(
-    tos_url: str, checkpoint_path: str, check_weight: bool = True
+    tos_url: str,
+    checkpoint_path: str,
+    check_weight: bool = True,
+    expected_sha256: str | None = None,
 ) -> None:
     """Internal helper to download from URL and verify weight files."""
-    urllib.request.urlretrieve(tos_url, checkpoint_path, reporthook=progress_callback)
-    if check_weight:
-        try:
-            ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    tmp_checkpoint_path = f"{checkpoint_path}.tmp"
+    if opexists(tmp_checkpoint_path):
+        os.remove(tmp_checkpoint_path)
+    try:
+        urllib.request.urlretrieve(
+            tos_url, tmp_checkpoint_path, reporthook=progress_callback
+        )
+        if expected_sha256 is not None:
+            actual_sha256 = sha256_file(tmp_checkpoint_path)
+            if actual_sha256 != expected_sha256:
+                raise RuntimeError(
+                    f"Download checksum mismatch for {checkpoint_path}: "
+                    f"expected {expected_sha256}, got {actual_sha256}."
+                )
+        if check_weight:
+            ckpt = torch.load(
+                tmp_checkpoint_path, map_location="cpu", weights_only=False
+            )
             del ckpt
-        except Exception as e:
-            if opexists(checkpoint_path):
-                os.remove(checkpoint_path)
-            raise RuntimeError(
-                f"Download model checkpoint failed: {e}. Please download "
-                f"manually with: wget {tos_url} -O {checkpoint_path}"
-            ) from e
+        os.replace(tmp_checkpoint_path, checkpoint_path)
+    except Exception as e:
+        if opexists(tmp_checkpoint_path):
+            os.remove(tmp_checkpoint_path)
+        raise RuntimeError(
+            f"Download failed: {e}. Please download manually with: "
+            f"wget {tos_url} -O {checkpoint_path}"
+        ) from e
 
 
 def download_inference_cache(configs: Any) -> None:
@@ -344,7 +372,11 @@ def download_inference_cache(configs: Any) -> None:
         logger.info(
             f"Downloading model checkpoint from\n {tos_url}...\n to {checkpoint_path}"
         )
-        download_from_url(tos_url, checkpoint_path)
+        download_from_url(
+            tos_url,
+            checkpoint_path,
+            expected_sha256=CHECKPOINT_SHA256.get(configs.model_name),
+        )
 
     if "esm" in configs.model_name:  # currently esm only support 3b model
         esm_3b_ckpt_path = f"{checkpoint_dir}/esm2_t36_3B_UR50D.pt"

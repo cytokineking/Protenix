@@ -13,7 +13,7 @@
 # limitations under the License.
 
 URL = {
-    "protenix-v2": "https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix-v2.pt",
+    "protenix-v2": "https://huggingface.co/TMF001/pxdesign-weights/resolve/main/checkpoint/protenix-v2.pt",
     "protenix_base_default_v1.0.0": "https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt",
     "protenix_base_20250630_v1.0.0": "https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_20250630_v1.0.0.pt",
     "protenix_base_default_v0.5.0": "https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v0.5.0.pt",
@@ -33,4 +33,8 @@ URL = {
     # the following files will be used if enable_template is True
     "obsolete_pdbs_path": "https://protenix.tos-cn-beijing.volces.com/common/obsolete_to_successor.json",
     "release_dates_path": "https://protenix.tos-cn-beijing.volces.com/common/release_date_cache.json",
+}
+
+CHECKPOINT_SHA256 = {
+    "protenix-v2": "8f931f9774a396b67033d0e58628e1834f4a1448165e04254b40a780b0c0d599",
 }

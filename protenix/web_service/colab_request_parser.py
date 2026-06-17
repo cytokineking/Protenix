@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -33,7 +34,7 @@ from protenix.web_service.colab_request_utils import (
     parse_fasta_string,
     run_mmseqs2_service,
 )
-from protenix.web_service.dependency_url import URL
+from protenix.web_service.dependency_url import CHECKPOINT_SHA256, URL
 
 MMSEQS_SERVICE_HOST_URL = os.getenv(
     "MMSEQS_SERVICE_HOST_URL", "https://protenix-server.com/api/msa"
@@ -47,14 +48,33 @@ DATA_CACHE_DIR = f"{PROTENIX_ROOT_DIR}/common/"
 CHECKPOINT_DIR = f"{PROTENIX_ROOT_DIR}/checkpoint/"
 
 
-def download_tos_url(tos_url, local_file_path):
+def sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download_tos_url(tos_url, local_file_path, expected_sha256: str | None = None):
+    tmp_local_file_path = f"{local_file_path}.tmp"
+    if opexists(tmp_local_file_path):
+        os.remove(tmp_local_file_path)
     try:
         response = requests.get(tos_url, stream=True)
 
         if response.status_code == 200:
-            with open(local_file_path, "wb") as file:
+            with open(tmp_local_file_path, "wb") as file:
                 for chunk in response.iter_content(chunk_size=8192):
                     file.write(chunk)
+            if expected_sha256 is not None:
+                actual_sha256 = sha256_file(tmp_local_file_path)
+                if actual_sha256 != expected_sha256:
+                    raise ValueError(
+                        f"Download checksum mismatch for {local_file_path}: "
+                        f"expected {expected_sha256}, got {actual_sha256}."
+                    )
+            os.replace(tmp_local_file_path, local_file_path)
             print(f"Succeeded downloading from {tos_url}.\nSaved to {local_file_path}.")
         else:
             print(
@@ -62,7 +82,9 @@ def download_tos_url(tos_url, local_file_path):
             )
 
     except Exception as e:
-        print(f"Error occured in downloading: {e}")
+        if opexists(tmp_local_file_path):
+            os.remove(tmp_local_file_path)
+        print(f"Error occurred in downloading: {e}")
 
 
 class TooLargeComplexError(Exception):
@@ -119,8 +141,12 @@ class RequestParser(object):
 
     def download_model(self, model_name: str, checkpoint_local_path: str) -> None:
         tos_url = URL[f"{model_name}"]
-        print(f"Downloading model checkpoing from\n {tos_url}...")
-        download_tos_url(tos_url, checkpoint_local_path)
+        print(f"Downloading model checkpoint from\n {tos_url}...")
+        download_tos_url(
+            tos_url,
+            checkpoint_local_path,
+            expected_sha256=CHECKPOINT_SHA256.get(model_name),
+        )
 
     def get_model(self) -> str:
         checkpoint_dir = CHECKPOINT_DIR
