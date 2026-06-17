@@ -328,6 +328,8 @@ class SymmetricPermutation(object):
             "chain_pair_iptm_global",
             "chain_pair_plddt",
             "chain_pair_gpde",
+            "chain_pair_pae_mean",
+            "chain_pair_pae_min",
         ],
     ):
         """

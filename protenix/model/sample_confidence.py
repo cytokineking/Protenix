@@ -148,6 +148,14 @@ def _compute_full_data_and_summary(
             full_data["atom_plddt"], token_asym_id, atom_to_token_idx
         )
     )
+    # Add: 'chain_pair_pae_mean', 'chain_pair_pae_min'
+    summary_confidence.update(
+        calculate_chain_pair_pae(
+            token_pair_pae=full_data["token_pair_pae"],
+            asym_id=token_asym_id,
+            token_has_frame=token_has_frame,
+        )
+    )
     del pae_prob
     summary_confidence["has_clash"] = calculate_clash(
         atom_coordinate,
@@ -654,6 +662,92 @@ def calculate_chain_based_gpde(
             )
 
     return {"chain_gpde": chain_gpde, "chain_pair_gpde": chain_pair_gpde}
+
+
+def calculate_chain_pair_pae(
+    token_pair_pae: torch.Tensor,
+    asym_id: torch.LongTensor,
+    token_has_frame: torch.BoolTensor,
+    contact_probs: torch.Tensor | None = None,
+    eps: float = 1e-8,
+) -> dict[str, torch.Tensor]:
+    """Calculate chain-pair PAE values.
+
+    Args:
+        token_pair_pae (torch.Tensor): PAE (Predicted Aligned Error) of token-token pairs.
+            [..., N_token, N_token]
+        asym_id (torch.LongTensor): Asymmetric ID for tokens.
+            [N_token]
+        token_has_frame (torch.BoolTensor): Indicator for tokens having a frame.
+            [N_token]
+        contact_probs (torch.Tensor | None): Optional contact probabilities.
+            [..., N_token, N_token]
+        eps (float): Small value to avoid division by zero.
+
+    Returns:
+        dict[str, torch.Tensor]: Dictionary containing chain-pair PAE values.
+            - chain_pair_pae_mean (torch.Tensor): Mean PAE for chain pairs.
+            - chain_pair_pae_min (torch.Tensor): Min PAE for chain pairs.
+    """
+
+    asym_id = asym_id.long()
+    unique_asym_ids = torch.unique(asym_id)
+    N_chain = len(unique_asym_ids)
+    if N_chain != asym_id.max() + 1:
+        # asym_id has gaps (chains were filtered out); remap to contiguous 0..N_chain-1
+        remap = {old.item(): new for new, old in enumerate(unique_asym_ids)}
+        asym_id = torch.tensor(
+            [remap[x.item()] for x in asym_id], dtype=torch.long, device=asym_id.device
+        )
+
+    batch_shape = token_pair_pae.shape[:-2]
+    device = token_pair_pae.device
+
+    if contact_probs is None:
+        contact_probs = torch.ones(token_pair_pae.shape[1:], dtype=float).to(device)
+
+    mask = token_has_frame[:, None] & token_has_frame[None, :]  # [N_token, N_token]
+    assert mask.shape == token_pair_pae.shape[1:]
+
+    chain_pair_pae_mean = torch.zeros(size=batch_shape + (N_chain, N_chain), device=device)
+    chain_pair_pae_min = torch.zeros(size=batch_shape + (N_chain, N_chain), device=device)
+
+    for aid_1 in range(N_chain):
+        mask_1 = asym_id == aid_1
+        sub_pae = token_pair_pae[..., mask_1, :]
+        sub_mask = mask[mask_1, :]
+        sub_contact_probs = contact_probs[mask_1, :]
+        for aid_2 in range(N_chain):
+            mask_2 = asym_id == aid_2
+
+            subsub_pae = sub_pae[..., mask_2]
+            subsub_mask = sub_mask[..., mask_2]
+            subsub_contact_probs = sub_contact_probs[..., mask_2]
+
+            (flat_subsub_mask_idxs,) = torch.where(subsub_mask.flatten() > 0)
+            flat_subsub_pae = subsub_pae.view(batch_shape[0], -1)
+            flat_subsub_contact_probs = subsub_contact_probs.flatten()
+
+            if not flat_subsub_mask_idxs.any():
+                chain_pair_pae_mean[..., aid_1, aid_2] = torch.nan
+                chain_pair_pae_min[..., aid_1, aid_2] = torch.nan
+            else:
+                valid_pae = flat_subsub_pae[:, flat_subsub_mask_idxs]
+                valid_contact_probs = flat_subsub_contact_probs[flat_subsub_mask_idxs]
+
+                # min
+                chain_pair_pae_min[..., aid_1, aid_2] = valid_pae.min(dim=-1).values
+
+                # weighted mean
+                chain_pair_pae_mean[..., aid_1, aid_2] = (
+                    valid_contact_probs* valid_pae
+                ).mean(dim=-1) / (valid_contact_probs.mean(dim=-1) + eps)
+
+
+    return {
+        "chain_pair_pae_mean": chain_pair_pae_mean,
+        "chain_pair_pae_min": chain_pair_pae_min,
+    }
 
 
 def calculate_chain_based_plddt(
