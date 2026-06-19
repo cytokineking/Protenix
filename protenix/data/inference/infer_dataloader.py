@@ -182,6 +182,8 @@ class InferenceDataset(Dataset):
             atom_array=atom_array,
             use_template=self.use_template,
             online_template_featurizer=self.online_template_featurizer,
+            task_templates=single_sample_dict.get("templates"),
+            input_json_path=self.input_json_path,
         )
         # Esm features
         if self.esm_enable:

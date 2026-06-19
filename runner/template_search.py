@@ -27,6 +27,39 @@ logger = get_logger(__name__)
 TEMPLATE_SEARCH_DATABASE_URL = "https://protenix.tos-cn-beijing.volces.com/search_database/pdb_seqres_2022_09_28.fasta"
 
 
+def _as_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _protein_chain_ids(protein_chain: dict[str, Any]) -> set[str]:
+    chain_ids = _as_list(protein_chain.get("id"))
+    if chain_ids:
+        return set(chain_ids)
+    count = int(protein_chain.get("count", 1))
+    return {str(idx) for idx in range(count)}
+
+
+def _task_template_covered_chain_ids(infer_data: dict[str, Any]) -> Optional[set[str]]:
+    """Return chain IDs covered by task-level templates; None means all proteins."""
+
+    if not infer_data.get("templates"):
+        return set()
+
+    covered: set[str] = set()
+    for template in infer_data["templates"]:
+        if not isinstance(template, dict):
+            continue
+        requested = _as_list(template.get("chain_id"))
+        if not requested:
+            return None
+        covered.update(requested)
+    return covered
+
+
 def ensure_ends_with_newline(s: str) -> str:
     """
     Ensure the string ends with a newline character.
@@ -178,9 +211,17 @@ def update_template_info(
     actual_updated = False
     for task_idx, infer_data in enumerate(json_data):
         task_name = infer_data.get("name", f"task_{task_idx}")
+        task_template_covered_chain_ids = _task_template_covered_chain_ids(infer_data)
         for sequence in infer_data["sequences"]:
             if "proteinChain" in sequence:
                 protein_chain = sequence["proteinChain"]
+                protein_chain_ids = _protein_chain_ids(protein_chain)
+                if (
+                    task_template_covered_chain_ids is None
+                    or protein_chain_ids.issubset(task_template_covered_chain_ids)
+                ):
+                    continue
+
                 # Skip if templatesPath already exists and is valid
                 if "templatesPath" in protein_chain and os.path.exists(
                     protein_chain["templatesPath"]

@@ -16,7 +16,7 @@ import os
 import subprocess
 import time
 from contextlib import nullcontext
-from typing import Sequence
+from typing import Optional, Sequence
 
 from protenix.data.tools.common import parse_kalign_a3m, tmpdir_manager, to_a3m
 from protenix.utils.logger import get_logger
@@ -36,7 +36,7 @@ class Kalign:
       RuntimeError: If Kalign binary not found within the path.
     """
 
-    def __init__(self, *, binary_path: str):
+    def __init__(self, *, binary_path: Optional[str]):
         # First check if kalign is available in the system PATH using 'which'
         found_path = None
         try:
@@ -53,7 +53,11 @@ class Kalign:
 
         # If not found in PATH, check the passed binary_path
         if found_path is None:
-            if os.path.exists(binary_path) and os.access(binary_path, os.X_OK):
+            if (
+                binary_path is not None
+                and os.path.exists(binary_path)
+                and os.access(binary_path, os.X_OK)
+            ):
                 found_path = binary_path
             else:
                 # Generate error message with installation instructions

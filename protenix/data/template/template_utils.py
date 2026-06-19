@@ -57,6 +57,10 @@ from protenix.data.template.template_parser import (
     TemplateParser,
     TemplateSearchResult,
 )
+from protenix.data.template.structural_template import (
+    StructuralTemplateError,
+    features_from_template_spec_for_chain,
+)
 from protenix.data.tools.kalign import Kalign
 from protenix.utils.logger import get_logger
 
@@ -854,13 +858,19 @@ class TemplateHitFeaturizer:
         }
 
 
-    def parse_json_templates(self, template_list: List[Dict], query_sequence: str) -> TemplateSearchResult:
+    def parse_json_templates(
+        self,
+        template_list: List[Dict],
+        query_sequence: str,
+        base_path: Optional[str] = None,
+    ) -> TemplateSearchResult:
         """
         Extract templates from the given template information.
 
         Args:
             template_list: A list of dictionaries containing template information.
             query_sequence: The query sequence.
+            base_path: Optional file path used to resolve relative template paths.
 
         Returns:
             A TemplateSearchResult object.
@@ -870,86 +880,30 @@ class TemplateHitFeaturizer:
         errors = []
         warnings = []
 
-        num_query = len(query_sequence)
-
         for idx, template_info in enumerate(template_list):
-            mmcif_str = template_info.get("mmcif", "")
-            q_indices = template_info.get("queryIndices", [])
-            t_indices = template_info.get("templateIndices", [])
-
-            if not mmcif_str or len(q_indices) != len(t_indices):
-                errors.append(f"Invalid template info at index {idx}")
-                continue
-
-            mapping = {q: t for q, t in zip(q_indices, t_indices)}
-
             try:
-                res = TemplateParser.parse_simple_cif(
-                    file_id=f"temp_{idx}", mmcif_string=mmcif_str
+                resolved = features_from_template_spec_for_chain(
+                    template_spec=template_info,
+                    query_sequence=query_sequence,
+                    hit_processor=self._hit_processor,
+                    template_index=idx,
+                    base_path=base_path,
+                    default_name=f"temp_{idx}",
                 )
-                if not res.mmcif_object:
-                    errors.append(f"No mmcif object generated for index {idx}. Errors: {res.errors}")
-                    continue
-
-                chain_ids = list(res.mmcif_object.chain_to_seqres.keys())
-                if not chain_ids:
-                    errors.append(f"No valid chain found in mmCIF at index {idx}")
-                    continue
-                chain_id = chain_ids[0]
-                template_seq = res.mmcif_object.chain_to_seqres[chain_id]
-
-                all_pos, all_mask = self._hit_processor._get_atom_positions(
-                    res.mmcif_object, chain_id, 150.0, self._zero_center_positions
-                )
+            except StructuralTemplateError as e:
+                errors.append(f"Invalid template info at index {idx}: {e}")
+                continue
             except Exception as e:
-                errors.append(f"Failed to parse mmCIF at index {idx}: {e}")
+                errors.append(f"Failed to parse template at index {idx}: {e}")
                 continue
 
-            out_pos = np.zeros((num_query, ATOM37_NUM, 3), dtype=np.float32)
-            out_mask = np.zeros((num_query, ATOM37_NUM), dtype=np.float32)
-            out_seq = ["-"] * num_query
+            features_list.append(resolved.features)
+            hits.append(resolved.hit)
+            warnings.extend(resolved.warnings)
 
-            for q_idx, t_idx in mapping.items():
-                if t_idx != -1 and t_idx < len(all_pos) and q_idx < num_query:
-                    out_pos[q_idx] = all_pos[t_idx]
-                    out_mask[q_idx] = all_mask[t_idx]
-                    out_seq[q_idx] = template_seq[t_idx] if t_idx < len(template_seq) else "-"
-
-            out_seq_str = "".join(out_seq)
-            aatype = encode_template_restype(PROTEIN_CHAIN, out_seq_str)
-
-            features = {
-                "template_all_atom_positions": out_pos,
-                "template_all_atom_masks": out_mask,
-                "template_sequence": out_seq_str.encode(),
-                "template_aatype": np.array(aatype, dtype=np.int32),
-                "template_domain_names": np.array(
-                    f"temp_{idx}".encode(), dtype=object
-                ),
-                "template_sum_probs": [1.0],
-                "template_release_date": np.array(b"9999-12-31", dtype=object)
-            }
-            features_list.append(features)
-
-            q_indices_hit = list(range(num_query))
-            h_indices_hit = [-1] * num_query
-            for q, t in mapping.items():
-                if q < num_query:
-                    h_indices_hit[q] = t
-
-            hit = TemplateHit(
-                index=idx,
-                name=f"temp_{idx}",
-                aligned_cols=len(mapping),
-                sum_probs=1.0,
-                query=query_sequence,
-                hit_sequence=template_seq,
-                indices_query=q_indices_hit,
-                indices_hit=h_indices_hit,
-            )
-            hits.append(hit)
-
-        return TemplateSearchResult(features=features_list, hits=hits, errors=errors, warnings=warnings)
+        return TemplateSearchResult(
+            features=features_list, hits=hits, errors=errors, warnings=warnings
+        )
 
 
     def get_templates(

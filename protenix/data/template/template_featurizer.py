@@ -30,6 +30,13 @@ from protenix.data.constants import (
 )
 from protenix.data.msa.msa_utils import map_to_standard
 from protenix.data.template.template_parser import HHRParser, HmmsearchA3MParser
+from protenix.data.template.structural_template import (
+    StructuralTemplateError,
+    features_from_template_spec_for_chain,
+    is_structural_template_path,
+    resolve_maybe_relative_path,
+    resolve_task_structural_templates,
+)
 from protenix.data.template.template_utils import (
     DAYS_BEFORE_QUERY_DATE,
     DistogramFeaturesConfig,
@@ -652,11 +659,20 @@ def get_safe_entity_id_for_template_copy(
 ) -> List[str]:
     """Identifies entity IDs that have consistent sequences across all chains."""
     eid_to_seqs = {}
+    eid_to_template_copy_allowed = {}
     for aid, info in bioassembly.items():
         eid = info["entity_id"]
         seq = info["sequence"]
         eid_to_seqs.setdefault(eid, set()).add(seq)
-    return [eid for eid, seqs in eid_to_seqs.items() if len(seqs) == 1]
+        eid_to_template_copy_allowed[eid] = (
+            eid_to_template_copy_allowed.get(eid, True)
+            and info.get("copy_templates", True)
+        )
+    return [
+        eid
+        for eid, seqs in eid_to_seqs.items()
+        if len(seqs) == 1 and eid_to_template_copy_allowed[eid]
+    ]
 
 
 class InferenceTemplateFeaturizer:
@@ -668,6 +684,8 @@ class InferenceTemplateFeaturizer:
         atom_array: AtomArray,
         use_template: bool = True,
         online_template_featurizer: Optional[TemplateHitFeaturizer] = None,
+        task_templates: Optional[Sequence[Mapping[str, Any]]] = None,
+        input_json_path: Optional[str] = None,
     ) -> Dict[str, np.ndarray]:
         """
         Generates template features during inference.
@@ -677,6 +695,8 @@ class InferenceTemplateFeaturizer:
             atom_array: Parsed atom structure.
             use_template: Whether to use templates.
             online_template_featurizer: Featurizer for processing template hits.
+            task_templates: Optional task-level structural template specifications.
+            input_json_path: Optional input JSON path for resolving relative paths.
 
         Returns:
             Dictionary of template features.
@@ -709,22 +729,47 @@ class InferenceTemplateFeaturizer:
             templates = []
             if t_path and use_template and online_template_featurizer:
                 assert ctype == PROTEIN_CHAIN, "Only protein templates are supported."
-                if t_path.endswith(".json"):
-                    json_list = load_json_cached(t_path)
-                    results = online_template_featurizer.parse_json_templates(json_list, seq)
+                resolved_t_path = resolve_maybe_relative_path(t_path, input_json_path)
+                if resolved_t_path.endswith(".json"):
+                    json_list = load_json_cached(resolved_t_path)
+                    results = online_template_featurizer.parse_json_templates(
+                        json_list, seq, base_path=resolved_t_path
+                    )
+                    if results.errors:
+                        raise ValueError(
+                            "Failed to parse JSON structural templates from "
+                            f"{resolved_t_path}: {results.errors}"
+                        )
                     templates = results.features
+                elif is_structural_template_path(resolved_t_path):
+                    suffix = resolved_t_path.rsplit(".", 1)[-1].lower()
+                    template_spec = (
+                        {"pdb": resolved_t_path}
+                        if suffix == "pdb"
+                        else {"cif": resolved_t_path}
+                    )
+                    resolved = features_from_template_spec_for_chain(
+                        template_spec=template_spec,
+                        query_sequence=seq,
+                        hit_processor=online_template_featurizer._hit_processor,
+                        template_index=0,
+                        base_path=resolved_t_path,
+                    )
+                    templates = [resolved.features]
                 else:
-                    with open(t_path, "r") as f:
+                    with open(resolved_t_path, "r") as f:
                         content = f.read()
 
-                    if t_path.endswith(".hhr"):
+                    if resolved_t_path.endswith(".hhr"):
                         hits = HHRParser.parse(hhr_string=content)
-                    elif t_path.endswith(".a3m"):
+                    elif resolved_t_path.endswith(".a3m"):
                         hits = HmmsearchA3MParser.parse(
                             query_seq=seq, a3m_str=content, skip_first=False
                         )
                     else:
-                        raise ValueError(f"Unsupported template format: {t_path}")
+                        raise ValueError(
+                            f"Unsupported template format: {resolved_t_path}"
+                        )
 
                     result, _ = online_template_featurizer.get_templates(
                         sequence_uid=seq,
@@ -743,9 +788,36 @@ class InferenceTemplateFeaturizer:
                     "chain_id": atom_array.chain_id[atom_array.asym_id_int == aid][0],
                     "sequence": seq,
                     "chain_entity_type": ctype,
-                    "templates": templates,
+                    "templates": list(templates),
+                    "copy_templates": True,
                 }
             curr_asym_id += count
+
+        if task_templates and use_template and online_template_featurizer:
+            target_chains = {
+                info["chain_id"]: info["sequence"]
+                for info in template_meta_infos.values()
+                if info["chain_entity_type"] == PROTEIN_CHAIN
+            }
+            try:
+                resolved_by_chain = resolve_task_structural_templates(
+                    template_specs=task_templates,
+                    target_chains=target_chains,
+                    hit_processor=online_template_featurizer._hit_processor,
+                    base_path=input_json_path,
+                )
+            except StructuralTemplateError as e:
+                raise ValueError(f"Failed to resolve structural templates: {e}") from e
+
+            chain_to_asym_id = {
+                info["chain_id"]: asym_id
+                for asym_id, info in template_meta_infos.items()
+                if info["chain_entity_type"] == PROTEIN_CHAIN
+            }
+            for chain_id, structural_features in resolved_by_chain.items():
+                asym_id = chain_to_asym_id[chain_id]
+                template_meta_infos[asym_id]["templates"].extend(structural_features)
+                template_meta_infos[asym_id]["copy_templates"] = False
 
         # Coordinate mapping
         ca = atom_array[atom_array.centre_atom_mask.astype(bool)]

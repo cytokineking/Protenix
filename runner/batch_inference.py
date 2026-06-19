@@ -393,34 +393,28 @@ def get_default_runner(
         assert os.path.exists(
             kalign_binary_path
         ), f"kalign_binary_path {kalign_binary_path} does not exist"
-    else:
-        # If no path is provided and templates are used, try to find kalign in the system PATH
-        if use_template:
-            found_path = None
-            try:
-                result = subprocess.run(
-                    ["which", "kalign"], capture_output=True, text=True
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    kalign_in_path = result.stdout.strip()
-                    if os.path.exists(kalign_in_path) and os.access(
-                        kalign_in_path, os.X_OK
-                    ):
-                        found_path = kalign_in_path
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                pass
+    elif use_template:
+        found_path = None
+        try:
+            result = subprocess.run(["which", "kalign"], capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                kalign_in_path = result.stdout.strip()
+                if os.path.exists(kalign_in_path) and os.access(
+                    kalign_in_path, os.X_OK
+                ):
+                    found_path = kalign_in_path
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
 
-            if found_path is not None:
-                configs.data.template.kalign_binary_path = found_path
-            else:
-                raise RuntimeError(
-                    "Kalign binary not found in system PATH. "
-                    "To install kalign, you can use one of the following methods:\n"
-                    "1. Using conda: conda install -c bioconda kalign\n"
-                    "2. Using apt (Ubuntu/Debian): apt-get install kalign\n"
-                    "3. Download from: https://github.com/TimoLassmann/kalign\n"
-                    "After installation, make sure the binary is accessible in PATH or provide kalign_binary_path."
-                )
+        if found_path is not None:
+            configs.data.template.kalign_binary_path = found_path
+        else:
+            configs.data.template.kalign_binary_path = None
+            logger.warning(
+                "Kalign binary not found in system PATH. Direct structural templates "
+                "can still be used, but .hhr/.a3m template processing and online "
+                "template hits require kalign_binary_path or a kalign executable in PATH."
+            )
     configs.sample_diffusion.guidance.enable = use_tfg_guidance
 
     configs = update_gpu_compatible_configs(configs)
@@ -682,7 +676,10 @@ def protenix_cli() -> None:
     "--use_template",
     type=bool,
     default=False,
-    help="Use templates (requires templatesPath in input JSON).",
+    help=(
+        "Use templates from per-chain templatesPath or task-level structural "
+        "templates in the input JSON."
+    ),
 )
 @click.option(
     "--use_rna_msa",
@@ -897,8 +894,10 @@ def predict(
         logger.info("=" * 50)
         logger.info(
             "Using templates for inference. Template files should have "
-            ".hrr or .a3m extensions and be specified in the JSON file.\n"
-            "Example: /path/to/template.hrr or /path/to/template.a3m\n"
+            ".hhr, .a3m, .json, .cif, .mmcif, or .pdb extensions and be "
+            "specified in the JSON file.\n"
+            "Examples: /path/to/template.hhr, /path/to/template.a3m, "
+            "/path/to/template.cif, or task-level structural templates.\n"
             "Note: Inference will proceed with automatic template search "
             "if none are provided and use_template is True."
         )
