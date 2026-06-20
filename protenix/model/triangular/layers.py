@@ -14,7 +14,6 @@
 # Copyright 2021 AlQuraishi Laboratory
 
 import math
-import os
 from functools import partial, partialmethod
 from typing import Callable, List, Optional, Tuple, Union
 
@@ -29,8 +28,9 @@ from protenix.model.utils import (
     is_fp16_enabled,
     permute_final_dims,
 )
+from protenix.model.layernorm_selector import resolve_layernorm_type
 
-fastln_is_installed = os.getenv("LAYERNORM_TYPE", "fast_layernorm") == "fast_layernorm"
+fastln_is_installed = resolve_layernorm_type() == "fast_layernorm"
 if fastln_is_installed:
     from protenix.model.layer_norm.layer_norm import FusedLayerNorm
 

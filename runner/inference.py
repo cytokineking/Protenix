@@ -32,6 +32,7 @@ from configs.configs_inference import inference_configs
 from configs.configs_model_type import model_configs
 from protenix.config.config import parse_configs, parse_sys_args
 from protenix.data.inference.infer_dataloader import get_inference_dataloader
+from protenix.model.layernorm_selector import resolve_layernorm_type
 from protenix.model.protenix import Protenix
 from protenix.utils.distributed import DIST_WRAPPER
 from protenix.utils.seed import seed_everything
@@ -119,10 +120,14 @@ class InferenceRunner(object):
                 "is first called."
             )
 
-        use_fastlayernorm = os.getenv("LAYERNORM_TYPE", "fast_layernorm")
+        use_fastlayernorm = resolve_layernorm_type()
         if use_fastlayernorm == "fast_layernorm":
             logging.info(
                 "Kernels will be compiled when fast_layernorm is first called."
+            )
+        else:
+            logging.info(
+                "Using %s layernorm implementation.", use_fastlayernorm
             )
 
         logging.info("Finished environment initialization.")
