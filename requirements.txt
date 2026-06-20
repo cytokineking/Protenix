@@ -1,6 +1,6 @@
-torch==2.7.1
-torchvision==0.22.1
-torchaudio==2.7.1
+torch>=2.11.0
+torchvision>=0.26.0
+torchaudio>=2.11.0
 cuequivariance-ops-torch-cu12==0.8.0
 cuequivariance-torch==0.8.0
 scipy>=1.9.0
@@ -22,7 +22,7 @@ scikit-learn==1.7.1
 scikit-learn-extra==0.3.0
 deepspeed==0.17.5
 pydantic>=2.0.0
-triton==3.3.1
+triton>=3.6.0
 optree==0.17.0
 protobuf==6.31.1
 icecream==2.1.7
