@@ -123,6 +123,17 @@ def _compute_full_data_and_summary(
         asym_id=token_asym_id,
         **get_bin_params(configs.loss.pae)
     )  # [N_s, ]
+    if return_full_data:
+        full_data["token_pair_tm_expected"] = calculate_token_pair_tm_expected(
+            pae_prob,
+            **get_bin_params(configs.loss.pae),
+        )
+        full_data["token_pair_tm_normalization_count"] = torch.full(
+            (pae_prob.shape[0],),
+            token_has_frame.shape[-1],
+            dtype=torch.long,
+            device=pae_prob.device,
+        )
 
     # Add: 'chain_gpde', 'chain_pair_gpde'
     summary_confidence.update(
@@ -333,6 +344,29 @@ def logits_to_score(
 def calculate_normalization(N: int) -> float:
     # TM-score normalization constant
     return 1.24 * (max(N, 19) - 15) ** (1 / 3) - 1.8
+
+
+def calculate_token_pair_tm_expected(
+    pae_prob: torch.Tensor,
+    min_bin: float,
+    max_bin: float,
+    no_bins: int,
+) -> torch.Tensor:
+    """Return native probability-reduced TM contributions for every token pair.
+
+    The normalization count is the complete token set, matching
+    :func:`calculate_iptm`.  Keeping this matrix allows downstream consumers to
+    replace physical-chain inequality with application-defined logical roles
+    without attempting to reconstruct probabilities from expected PAE.
+    """
+
+    token_count = pae_prob.shape[-3]
+    ptm_norm = calculate_normalization(token_count)
+    bin_center = get_bin_centers(min_bin, max_bin, no_bins)
+    per_bin_weight = (1 / (1 + (bin_center / ptm_norm) ** 2)).to(
+        pae_prob.device
+    )
+    return (pae_prob * per_bin_weight).sum(dim=-1)
 
 
 def calculate_vdw_clash(
