@@ -40,8 +40,19 @@ def get_clean_full_confidence(full_confidence_dict: dict) -> dict:
     full_confidence_dict.pop("atom_coordinate")
     # Remove atom_is_polymer
     full_confidence_dict.pop("atom_is_polymer")
-    # Keep two decimal places
+    # Preserve native expected-TM contributions at model precision.  Rounding
+    # this matrix makes exact logical-role ipTM reconstruction impossible.
+    token_pair_tm_expected = full_confidence_dict.pop(
+        "token_pair_tm_expected", None
+    )
+    # Keep two decimal places for the established diagnostic payload.
     full_confidence_dict = round_values(full_confidence_dict)
+    if token_pair_tm_expected is not None:
+        if isinstance(token_pair_tm_expected, torch.Tensor):
+            if token_pair_tm_expected.dtype == torch.bfloat16:
+                token_pair_tm_expected = token_pair_tm_expected.float()
+            token_pair_tm_expected = token_pair_tm_expected.cpu().numpy()
+        full_confidence_dict["token_pair_tm_expected"] = token_pair_tm_expected
     return full_confidence_dict
 
 
