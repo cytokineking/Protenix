@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import unittest
 
 import torch
@@ -207,6 +208,7 @@ class TestSampleConfidence(unittest.TestCase):
                 "atom_is_polymer": torch.ones(1),
                 "token_pair_pae": torch.tensor([[1.2345, 6.789]]),
                 "token_pair_tm_expected": expected.clone(),
+                "token_pair_tm_normalization_count": torch.tensor(2),
             }
         )
 
@@ -216,6 +218,8 @@ class TestSampleConfidence(unittest.TestCase):
             places=6,
         )
         self.assertAlmostEqual(float(cleaned["token_pair_pae"][0, 0]), 1.23)
+        self.assertEqual(cleaned["token_pair_tm_normalization_count"], 2)
+        json.dumps(cleaned["token_pair_tm_normalization_count"])
 
 
 if __name__ == "__main__":

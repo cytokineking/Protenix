@@ -45,6 +45,9 @@ def get_clean_full_confidence(full_confidence_dict: dict) -> dict:
     token_pair_tm_expected = full_confidence_dict.pop(
         "token_pair_tm_expected", None
     )
+    token_pair_tm_normalization_count = full_confidence_dict.pop(
+        "token_pair_tm_normalization_count", None
+    )
     # Keep two decimal places for the established diagnostic payload.
     full_confidence_dict = round_values(full_confidence_dict)
     if token_pair_tm_expected is not None:
@@ -53,6 +56,18 @@ def get_clean_full_confidence(full_confidence_dict: dict) -> dict:
                 token_pair_tm_expected = token_pair_tm_expected.float()
             token_pair_tm_expected = token_pair_tm_expected.cpu().numpy()
         full_confidence_dict["token_pair_tm_expected"] = token_pair_tm_expected
+    if token_pair_tm_normalization_count is not None:
+        if isinstance(token_pair_tm_normalization_count, torch.Tensor):
+            token_pair_tm_normalization_count = (
+                token_pair_tm_normalization_count.item()
+            )
+        if isinstance(token_pair_tm_normalization_count, np.generic):
+            token_pair_tm_normalization_count = (
+                token_pair_tm_normalization_count.item()
+            )
+        full_confidence_dict["token_pair_tm_normalization_count"] = int(
+            token_pair_tm_normalization_count
+        )
     return full_confidence_dict
 
 
