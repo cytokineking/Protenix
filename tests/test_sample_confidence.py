@@ -12,11 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import unittest
 
 import torch
 
-from protenix.model.sample_confidence import calculate_chain_pair_pae
+from protenix.model.sample_confidence import (
+    calculate_chain_pair_pae,
+    calculate_iptm,
+    calculate_token_pair_tm_expected,
+)
+from runner.dumper import get_clean_full_confidence
 
 
 class TestCalculateChainPairPAE(unittest.TestCase):
@@ -168,6 +174,52 @@ class TestSampleConfidence(unittest.TestCase):
 
         self.assertEqual(chain_pair_pae_min.shape, (N_sample, 2, 2))
         self.assertTrue(torch.allclose(chain_pair_pae_min[0, 0, 1], torch.tensor(1.0)))
+
+    def test_exported_expected_tm_reproduces_native_iptm_reduction(self):
+        torch.manual_seed(7)
+        probabilities = torch.softmax(torch.randn(2, 4, 4, 8), dim=-1)
+        has_frame = torch.tensor([True, False, True, True])
+        asym_id = torch.tensor([0, 0, 1, 1])
+        bin_params = {"min_bin": 0.0, "max_bin": 32.0, "no_bins": 8}
+
+        native = calculate_iptm(
+            probabilities,
+            has_frame=has_frame,
+            asym_id=asym_id,
+            **bin_params,
+        )
+        expected_tm = calculate_token_pair_tm_expected(
+            probabilities,
+            **bin_params,
+        )
+        cross_role = asym_id[:, None] != asym_id[None, :]
+        per_row = (expected_tm * cross_role).sum(dim=-1) / (
+            cross_role.sum(dim=-1) + 1e-8
+        )
+        reconstructed = per_row[..., has_frame].max(dim=-1).values
+
+        self.assertTrue(torch.allclose(reconstructed, native))
+
+    def test_expected_tm_matrix_is_not_rounded_by_full_data_cleaner(self):
+        expected = torch.tensor([[0.123456, 0.987654]], dtype=torch.float32)
+        cleaned = get_clean_full_confidence(
+            {
+                "atom_coordinate": torch.zeros(1, 3),
+                "atom_is_polymer": torch.ones(1),
+                "token_pair_pae": torch.tensor([[1.2345, 6.789]]),
+                "token_pair_tm_expected": expected.clone(),
+                "token_pair_tm_normalization_count": torch.tensor(2),
+            }
+        )
+
+        self.assertAlmostEqual(
+            float(cleaned["token_pair_tm_expected"][0, 0]),
+            0.123456,
+            places=6,
+        )
+        self.assertAlmostEqual(float(cleaned["token_pair_pae"][0, 0]), 1.23)
+        self.assertEqual(cleaned["token_pair_tm_normalization_count"], 2)
+        json.dumps(cleaned["token_pair_tm_normalization_count"])
 
 
 if __name__ == "__main__":

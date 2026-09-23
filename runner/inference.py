@@ -32,6 +32,7 @@ from configs.configs_inference import inference_configs
 from configs.configs_model_type import model_configs
 from protenix.config.config import parse_configs, parse_sys_args
 from protenix.data.inference.infer_dataloader import get_inference_dataloader
+from protenix.inference_optimizations import resolve_policy, skip_random_initialization
 from protenix.model.layernorm_selector import resolve_layernorm_type
 from protenix.model.protenix import Protenix
 from protenix.utils.distributed import DIST_WRAPPER
@@ -74,6 +75,7 @@ class InferenceRunner(object):
 
     def __init__(self, configs: Any) -> None:
         self.configs = configs
+        self.portable_policy = resolve_policy(configs)
         self.init_env()
         self.init_basics()
         self.init_model()
@@ -121,6 +123,16 @@ class InferenceRunner(object):
             )
 
         use_fastlayernorm = resolve_layernorm_type()
+        logging.info(
+            "Protenix portable mode=%s features=%s source=%s torch=%s gpu=%s capability=%s layernorm=%s",
+            self.portable_policy.mode,
+            ",".join(sorted(self.portable_policy.features)) or "none",
+            __file__,
+            torch.__version__,
+            torch.cuda.get_device_name(self.device) if self.use_cuda else "cpu",
+            torch.cuda.get_device_capability(self.device) if self.use_cuda else "none",
+            use_fastlayernorm,
+        )
         if use_fastlayernorm == "fast_layernorm":
             logging.info(
                 "Kernels will be compiled when fast_layernorm is first called."
@@ -145,7 +157,12 @@ class InferenceRunner(object):
         """
         Initialize the Protenix model and move it to the appropriate device.
         """
-        self.model = Protenix(self.configs).to(self.device)
+        if self.portable_policy.enabled("lazy_init"):
+            with skip_random_initialization() as patched:
+                self.model = Protenix(self.configs).to(self.device)
+            logger.info("Protenix portable lazy_init applied initializers=%s", patched)
+        else:
+            self.model = Protenix(self.configs).to(self.device)
 
     def load_checkpoint(self) -> None:
         """
@@ -492,11 +509,14 @@ def infer_predict(runner: InferenceRunner, configs: Any) -> None:
 
     num_data = len(dataloader.dataset)
     t0_start = time.time()
+    policy = getattr(runner, "portable_policy", resolve_policy())
     for seed in seeds:
         seed_everything(seed=seed, deterministic=configs.deterministic)
         t1_start = time.time()
         for batch in dataloader:
             sample_name = "unknown"
+            if policy.enabled("release_prediction"):
+                prediction = None
             try:
                 t2_start = time.time()
                 data, atom_array, data_error_message = batch[0]
@@ -533,6 +553,8 @@ def infer_predict(runner: InferenceRunner, configs: Any) -> None:
                         if v != "non-polymer"
                     },
                 )
+                if policy.enabled("release_prediction"):
+                    prediction = None
                 t2_end = time.time()
                 logger.info(
                     f"[Rank {DIST_WRAPPER.rank}] {sample_name} [seed:{seed}] succeeded. "
@@ -553,6 +575,9 @@ def infer_predict(runner: InferenceRunner, configs: Any) -> None:
                 ) as f:
                     f.write(error_message)
                 torch.cuda.empty_cache()
+            finally:
+                if policy.enabled("release_prediction"):
+                    prediction = None
         t1_end = time.time()
         logger.info(
             f"[Rank {DIST_WRAPPER.rank}] Seed {seed} completed in {t1_end - t1_start:.2f}s."
