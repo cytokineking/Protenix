@@ -36,6 +36,8 @@ def resolve_layernorm_type() -> str:
     layernorm_type = os.getenv("LAYERNORM_TYPE")
     if layernorm_type:
         return layernorm_type
+    if os.getenv("PROTENIX_DEVICE") == "cpu" or not torch.cuda.is_available():
+        return "torch"
     if cuda_has_blackwell_or_newer_device():
         return "torch"
     return "fast_layernorm"

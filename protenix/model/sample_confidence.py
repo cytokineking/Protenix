@@ -738,7 +738,11 @@ def calculate_chain_pair_pae(
     device = token_pair_pae.device
 
     if contact_probs is None:
-        contact_probs = torch.ones(token_pair_pae.shape[1:], dtype=float).to(device)
+        # Metal has no float64 tensors. Keep the existing accumulation precision elsewhere.
+        weight_dtype = torch.float32 if device.type == "mps" else torch.float64
+        contact_probs = torch.ones(
+            token_pair_pae.shape[1:], device=device, dtype=weight_dtype
+        )
 
     mask = token_has_frame[:, None] & token_has_frame[None, :]  # [N_token, N_token]
     assert mask.shape == token_pair_pae.shape[1:]

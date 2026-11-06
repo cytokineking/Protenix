@@ -115,6 +115,36 @@ without installing libraries for both CUDA major versions.
 For `protenix score`, also install and configure the optional
 [`protenixscore`](https://github.com/cytokineking/ProtenixScore) package.
 
+### Apple Silicon V2 inference
+
+The Mac runner uses PyTorch MPS in FP32 with the native torch triangle
+kernels and LayerNorm. The tested stack uses arm64 Python 3.12 and PyTorch
+2.11.0. From this checkout, create a separate environment:
+
+```bash
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -e . \
+  torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0
+```
+
+Set `PROTENIX_ROOT_DIR` to a writable data directory and place an authorized
+copy of `protenix-v2.pt` in its `checkpoint/` directory. The runner verifies
+the V2 SHA-256 before loading the weights. The first run populates the
+`common/` directory with the Protenix chemistry and inference data.
+
+```bash
+export PROTENIX_ROOT_DIR=/path/to/local/protenix-data
+export PROTENIX_DEVICE=mps
+.venv/bin/python -m runner.inference --model_name protenix-v2 \
+  --input_json_path /path/to/input.json --dump_dir ./output \
+  --model.N_cycle 10 --sample_diffusion.N_step 200 --sample_diffusion.N_sample 1 \
+  --seeds 101 --use_msa false --use_template true --need_atom_confidence true
+```
+
+This example uses direct protein structural templates. Explicit `mps` requires
+an accessible Metal device. Automatic selection prefers CUDA, then MPS, then
+CPU. Set `PROTENIX_DEVICE=cpu` for a CPU reference.
+
 ## Running Standard Protenix Prediction
 
 The normal Protenix prediction command remains available:
@@ -132,7 +162,7 @@ For upstream usage details, see:
 
 ## Checkpoint Mirror
 
-The `protenix-v2` checkpoint is downloaded from the Hugging Face mirror at
+The Linux downloader obtains the `protenix-v2` checkpoint from the Hugging Face mirror at
 `TMF001/pxdesign-weights` by default because the upstream ByteDance checkpoint
 endpoint can be inaccessible outside China. The downloader verifies the
 published SHA256 checksum for this checkpoint. Other checkpoints and common
@@ -150,9 +180,9 @@ runtime assets continue to use the upstream ByteDance URLs.
 
 ## License and Citation
 
-This fork preserves the upstream Protenix license. The Protenix project,
-including code and model parameters, is released under the
-[Apache 2.0 License](LICENSE).
+The source code uses the [Apache 2.0 License](LICENSE). ByteDance designates
+the V2 weights as proprietary and requires prior written consent for
+redistribution. [Upstream V2 release terms](https://github.com/bytedance/Protenix/blob/85767b811c40ed46e73a9b39519cf6bfca8701ba/README.md#-latest-updates)
 
 If you use this fork in research, cite the relevant upstream Protenix work as
 described in the [official repository](https://github.com/bytedance/Protenix).

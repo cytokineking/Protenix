@@ -54,12 +54,12 @@ class TestLayerNormSelection(unittest.TestCase):
                 layernorm_selector.resolve_layernorm_type(), "fast_layernorm"
             )
 
-    def test_no_cuda_defaults_to_fast_layernorm(self) -> None:
+    def test_no_cuda_defaults_to_torch_layernorm(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch.object(
             layernorm_selector.torch.cuda, "is_available", return_value=False
         ):
             self.assertEqual(
-                layernorm_selector.resolve_layernorm_type(), "fast_layernorm"
+                layernorm_selector.resolve_layernorm_type(), "torch"
             )
 
 

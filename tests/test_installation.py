@@ -21,13 +21,57 @@ Related to GitHub issues #182 (pip install error)
 """
 
 import importlib.util
+import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 class TestInstallation(unittest.TestCase):
     """Test that package dependencies are compatible"""
+
+    def test_explicit_mps_requires_metal(self):
+        from runner.inference import inference_device
+
+        with patch.dict(os.environ, PROTENIX_DEVICE="mps"), patch(
+            "torch.backends.mps.is_available", return_value=False
+        ):
+            with self.assertRaisesRegex(ValueError, "PROTENIX_DEVICE"):
+                inference_device()
+
+    def test_auto_selects_cuda_before_mps(self):
+        from runner.inference import inference_device
+
+        with patch.dict(os.environ, PROTENIX_DEVICE="auto"), patch(
+            "torch.cuda.is_available", return_value=True
+        ), patch("torch.backends.mps.is_available", return_value=True):
+            self.assertEqual(inference_device().type, "cuda")
+
+    def test_device_kernel_selection(self):
+        import torch
+
+        from runner.inference import update_gpu_compatible_configs
+
+        for device, capability, expected_dtype, expected_kernel, fusion in [
+            ("mps", None, "fp32", "torch", False),
+            ("cpu", None, "fp32", "torch", False),
+            ("cuda", (7, 0), "fp32", "torch", True),
+            ("cuda", (9, 0), "bf16", "cuequivariance", True),
+        ]:
+            with self.subTest(device=device, capability=capability), patch(
+                "torch.cuda.get_device_capability", return_value=capability
+            ):
+                configs = SimpleNamespace(dtype="bf16", triangle_attention="cuequivariance",
+                                          triangle_multiplicative="cuequivariance",
+                                          enable_efficient_fusion=True, enable_tf32=True)
+                update_gpu_compatible_configs(configs, torch.device(device))
+                self.assertEqual(configs.dtype, expected_dtype)
+                self.assertEqual(configs.triangle_attention, expected_kernel)
+                self.assertEqual(configs.triangle_multiplicative, expected_kernel)
+                self.assertEqual(configs.enable_efficient_fusion, fusion)
+                self.assertEqual(configs.enable_tf32, fusion)
 
     def test_python_version(self):
         """Verify Python version is compatible (3.11+)"""
