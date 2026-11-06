@@ -1,7 +1,7 @@
 torch>=2.11.0
 torchvision>=0.26.0
 torchaudio>=2.11.0
-cuequivariance-torch>=0.8.0,<0.11.0
+cuequivariance-torch>=0.8.0,<0.11.0; sys_platform != 'darwin'
 scipy>=1.9.0
 ml_collections==1.1.0
 tqdm==4.67.1
@@ -18,10 +18,10 @@ gemmi==0.6.7
 pdbeccdutils==1.0.0
 fair-esm==2.0.0
 scikit-learn==1.7.1
-scikit-learn-extra==0.3.0
-deepspeed==0.17.5
+scikit-learn-extra==0.3.0; sys_platform != 'darwin'
+deepspeed==0.17.5; sys_platform != 'darwin'
 pydantic>=2.0.0
-triton>=3.6.0
+triton>=3.6.0; sys_platform != 'darwin'
 optree==0.17.0
 protobuf==6.31.1
 icecream==2.1.7

@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import time
 import traceback
 import urllib.request
@@ -63,6 +64,18 @@ by manually adding argparse.Namespace to PyTorch's safe globals list.
 torch.serialization.add_safe_globals([Namespace])
 
 
+def inference_device() -> torch.device:
+    """Select a single Metal device, the local CUDA rank, or CPU."""
+    backend = os.getenv("PROTENIX_DEVICE", "auto")
+    if backend in {"auto", "cuda"} and torch.cuda.is_available():
+        return torch.device("cuda", DIST_WRAPPER.local_rank)
+    if backend in {"auto", "mps"} and torch.backends.mps.is_available():
+        return torch.device("mps")
+    if backend in {"auto", "cpu"}:
+        return torch.device("cpu")
+    raise ValueError(f"Unavailable PROTENIX_DEVICE={backend!r} (auto, cuda, mps, cpu)")
+
+
 class InferenceRunner(object):
     """
     Runner class for AlphaFold3 model inference.
@@ -73,7 +86,8 @@ class InferenceRunner(object):
     """
 
     def __init__(self, configs: Any) -> None:
-        self.configs = configs
+        self.device = inference_device()
+        self.configs = update_gpu_compatible_configs(configs, self.device)
         self.init_env()
         self.init_basics()
         self.init_model()
@@ -91,9 +105,16 @@ class InferenceRunner(object):
             f"Distributed environment: world size: {DIST_WRAPPER.world_size}, "
             f"global rank: {DIST_WRAPPER.rank}, local rank: {DIST_WRAPPER.local_rank}"
         )
-        self.use_cuda = torch.cuda.device_count() > 0
+        self.use_cuda = self.device.type == "cuda"
+        self.print(
+            f"Inference device: {self.device}, dtype: {self.configs.dtype}, "
+            f"triangle kernels: {self.configs.triangle_multiplicative}/"
+            f"{self.configs.triangle_attention}, "
+            f"shared_vars_cache: {self.configs.enable_diffusion_shared_vars_cache}, "
+            f"efficient_fusion: {self.configs.enable_efficient_fusion}, "
+            f"tf32: {self.configs.enable_tf32}"
+        )
         if self.use_cuda:
-            self.device = torch.device(f"cuda:{DIST_WRAPPER.local_rank}")
             os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
             all_gpu_ids = ",".join(str(x) for x in range(torch.cuda.device_count()))
             devices = os.getenv("CUDA_VISIBLE_DEVICES", all_gpu_ids)
@@ -101,10 +122,10 @@ class InferenceRunner(object):
                 f"LOCAL_RANK: {DIST_WRAPPER.local_rank} - CUDA_VISIBLE_DEVICES: [{devices}]"
             )
             torch.cuda.set_device(self.device)
-        else:
-            self.device = torch.device("cpu")
 
         if DIST_WRAPPER.world_size > 1:
+            if not self.use_cuda:
+                raise ValueError("Multi-rank inference requires CUDA.")
             dist.init_process_group(backend="nccl")
 
         if self.configs.triangle_attention == "deepspeed":
@@ -161,12 +182,17 @@ class InferenceRunner(object):
             raise FileNotFoundError(
                 f"Given checkpoint path not exist [{checkpoint_path}]"
             )
+        if sys.platform == "darwin" and self.configs.model_name == "protenix-v2":
+            if sha256_file(checkpoint_path) != CHECKPOINT_SHA256["protenix-v2"]:
+                raise ValueError("Local protenix-v2.pt failed SHA-256 verification.")
 
         self.print(
             f"Loading from {checkpoint_path}, strict: {self.configs.load_strict}"
         )
         checkpoint = torch.load(
-            checkpoint_path, map_location=self.device, weights_only=False
+            checkpoint_path,
+            map_location="cpu" if self.device.type == "mps" else self.device,
+            weights_only=False,
         )
 
         sample_key = list(checkpoint["model"].keys())[0]
@@ -225,7 +251,7 @@ class InferenceRunner(object):
 
         enable_amp = (
             torch.autocast(device_type="cuda", dtype=eval_precision)
-            if torch.cuda.is_available()
+            if self.use_cuda
             else nullcontext()
         )
 
@@ -329,6 +355,18 @@ def download_inference_cache(configs: Any) -> None:
         configs (Any): Configuration object containing paths and model names.
     """
 
+    checkpoint_dir = configs.load_checkpoint_dir
+    checkpoint_path = opjoin(checkpoint_dir, f"{configs.model_name}.pt")
+    if (
+        sys.platform == "darwin"
+        and configs.model_name == "protenix-v2"
+        and not opexists(checkpoint_path)
+    ):
+        raise FileNotFoundError(
+            f"Supply an authorized protenix-v2.pt in {checkpoint_dir} "
+            "(--load_checkpoint_dir) before running V2 on macOS."
+        )
+
     for cache_name in (
         "ccd_components_file",
         "ccd_components_rdkit_mol_file",
@@ -367,9 +405,6 @@ def download_inference_cache(configs: Any) -> None:
                 download_from_url(tos_url, cur_cache_fpath, check_weight=False)
             else:
                 logger.info(f"{cache_name} already exists at {cur_cache_fpath}")
-
-    checkpoint_path = f"{configs.load_checkpoint_dir}/{configs.model_name}.pt"
-    checkpoint_dir = configs.load_checkpoint_dir
 
     if not opexists(checkpoint_path):
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -582,35 +617,20 @@ def main(configs: Any) -> None:
     infer_predict(runner, configs)
 
 
-def update_gpu_compatible_configs(configs: Any) -> Any:
-    """
-    Update configurations to ensure compatibility with specific GPU architectures (e.g., V100).
-
-    Args:
-        configs (Any): Original configurations.
-
-    Returns:
-        Any: Updated configurations.
-    """
-
-    def is_gpu_capability_between_7_and_8() -> bool:
-        # Check if 7.0 <= device_capability < 8.0
-        if not torch.cuda.is_available():
-            return False
-        capability = torch.cuda.get_device_capability()
-        major, minor = capability
-        cc = major + minor / 10.0
-        return 7.0 <= cc < 8.0
-
-    if is_gpu_capability_between_7_and_8():
-        # V100 and similar architectures don't support some kernels or BF16 effectively
-        configs.dtype = "fp32"
-        configs.triangle_attention = "torch"
-        configs.triangle_multiplicative = "torch"
-        logger.info(
-            "Enforcing FP32 and torch kernels for compatibility with detected "
-            "GPU (Compute Capability 7.x)."
-        )
+def update_gpu_compatible_configs(configs: Any, device: torch.device | None = None) -> Any:
+    """Apply inference settings supported by the selected device."""
+    if device is None:
+        device = inference_device()
+    if device.type == "cuda":
+        if torch.cuda.get_device_capability(device)[0] != 7:
+            return configs
+        logger.info("Selecting FP32 and torch kernels for CUDA compute capability 7.x.")
+    else:
+        configs.enable_efficient_fusion = False
+        configs.enable_tf32 = False
+    configs.dtype = "fp32"
+    configs.triangle_attention = "torch"
+    configs.triangle_multiplicative = "torch"
     return configs
 
 
@@ -683,16 +703,7 @@ def run() -> None:
     logger.info(
         f"Inference by Protenix: model_size: {model_size}, "
         f"with_feature: {model_feature.replace('-', ', ')}, "
-        f"model_version: {model_version}, dtype: {configs.dtype}"
-    )
-    configs = update_gpu_compatible_configs(configs)
-    logger.info(
-        f"Triangle kernels: multiplicative={configs.triangle_multiplicative}, "
-        f"attention={configs.triangle_attention}"
-    )
-    logger.info(
-        f"Optimization: shared_vars_cache={configs.enable_diffusion_shared_vars_cache}, "
-        f"efficient_fusion={configs.enable_efficient_fusion}, tf32={configs.enable_tf32}"
+        f"model_version: {model_version}"
     )
     download_inference_cache(configs)
     main(configs)

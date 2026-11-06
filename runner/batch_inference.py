@@ -44,7 +44,6 @@ from runner.inference import (
     download_inference_cache,
     infer_predict,
     InferenceRunner,
-    update_gpu_compatible_configs,
 )
 from runner.msa_search import msa_search, update_infer_json
 from runner.rna_msa_search import update_rna_msa_info
@@ -417,20 +416,10 @@ def get_default_runner(
             )
     configs.sample_diffusion.guidance.enable = use_tfg_guidance
 
-    configs = update_gpu_compatible_configs(configs)
     logger.info(
         f"Inference by Protenix: model_size: {model_size}, "
         f"with_feature: {model_feature.replace('-', ',')}, "
-        f"model_version: {model_version}, dtype: {configs.dtype}"
-    )
-    logger.info(
-        f"Triangle_multiplicative kernel: {trimul_kernel}, "
-        f"Triangle_attention kernel: {triatt_kernel}"
-    )
-    logger.info(
-        f"enable_diffusion_shared_vars_cache: {configs.enable_diffusion_shared_vars_cache}, "
-        f"enable_efficient_fusion: {configs.enable_efficient_fusion}, "
-        f"enable_tf32: {configs.enable_tf32}"
+        f"model_version: {model_version}"
     )
     download_inference_cache(configs)
     return InferenceRunner(configs)
